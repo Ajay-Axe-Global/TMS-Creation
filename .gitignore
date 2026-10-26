@@ -1,0 +1,32 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+
+# Runtime
+logs/*
+!logs/.gitkeep
+uploads/*
+!uploads/.gitkeep
+
+# Browser sessions / traces (live logins)
+browser_profiles/
+traces/
+
+.DS_Store
+.vscode/
+.idea/

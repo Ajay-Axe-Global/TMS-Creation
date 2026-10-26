@@ -1,0 +1,329 @@
+"""
+Business logic behind /api/admin/*. Every function takes an open SQLAlchemy
+session, raises ServiceError(message, status) for anything the caller did wrong,
+and commits its own writes. routes/admin_routes.py only translates HTTP <-> this.
+"""
+from sqlalchemy import func
+
+from database.models import (
+    AuditLog, Client, DepotAddress, TmsCredential, User, UserClientAccess,
+)
+from database.seed import slugify
+from helpers import addresses as address_svc
+from helpers import audit as audit_svc
+from helpers.crypto_utils import encrypt_secret
+from helpers.jwt_utils import hash_password
+
+MIN_PASSWORD_LEN = 8
+ROLES = ("admin", "user")
+
+
+class ServiceError(Exception):
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.message, self.status = message, status
+
+
+def _clean(value) -> str:
+    return (value or "").strip()
+
+
+def _need(value, label: str) -> str:
+    value = _clean(value)
+    if not value:
+        raise ServiceError(f"{label} is required")
+    return value
+
+
+def _check_password(password: str) -> str:
+    if not password or len(password) < MIN_PASSWORD_LEN:
+        raise ServiceError(f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    return password
+
+
+def _fmt(dt):
+    return dt.isoformat() + "Z" if dt else None
+
+
+# ── Clients (one customer at one warehouse) ───────────────────────────────────
+
+def display_name(client_name: str, warehouse: str) -> str:
+    return f"{client_name} - {warehouse}" if warehouse else client_name
+
+
+def client_dict(c: Client) -> dict:
+    return {"id": c.id, "name": c.name, "slug": c.slug,
+            "client_name": c.client_name, "warehouse": c.warehouse,
+            "flow_slug": slugify(c.client_name),        # the clients/<flow_slug>/ code folder
+            "tms_customer_no": c.tms_customer_no, "tms_tradelane_no": c.tms_tradelane_no,
+            "is_active": c.is_active, "user_count": len(c.grants),
+            "ready": bool(c.tms_customer_no and c.tms_tradelane_no and c.warehouse)}
+
+
+def list_clients(session):
+    return [client_dict(c) for c in session.query(Client).order_by(Client.client_name, Client.warehouse)]
+
+
+def _check_client_free(session, client_name: str, warehouse: str, slug: str, exclude_id=None):
+    q = session.query(Client).filter(
+        (func.lower(Client.client_name) == client_name.lower()) & (func.lower(Client.warehouse) == warehouse.lower())
+        | (Client.slug == slug))
+    if exclude_id:
+        q = q.filter(Client.id != exclude_id)
+    if q.first():
+        raise ServiceError(f'"{display_name(client_name, warehouse)}" already exists', 409)
+
+
+def create_client(session, actor_id, data):
+    client_name = _need(data.get("client_name"), "Client name")
+    warehouse = _need(data.get("warehouse"), "Warehouse")
+    name = display_name(client_name, warehouse)
+    slug = slugify(name)
+    if not slugify(client_name):
+        raise ServiceError("Client name must contain letters or digits")
+    _check_client_free(session, client_name, warehouse, slug)
+    c = Client(client_name=client_name, warehouse=warehouse, name=name, slug=slug,
+               tms_customer_no=_clean(data.get("tms_customer_no")) or None,
+               tms_tradelane_no=_clean(data.get("tms_tradelane_no")) or None)
+    session.add(c)
+    audit_svc.audit(session, actor_id, "client.create", name)
+    session.commit()
+    return client_dict(c)
+
+
+def update_client(session, actor_id, client_id, data):
+    c = session.get(Client, client_id)
+    if not c:
+        raise ServiceError("Client not found", 404)
+    changes = []
+    # The client name is permanent (it names the flow code folder); the warehouse can be
+    # corrected, which renames the client and its URL slug.
+    if "warehouse" in data and _clean(data["warehouse"]) != c.warehouse:
+        warehouse = _need(data["warehouse"], "Warehouse")
+        name = display_name(c.client_name, warehouse)
+        slug = slugify(name)
+        _check_client_free(session, c.client_name, warehouse, slug, exclude_id=c.id)
+        changes.append(f"warehouse {c.warehouse!r} -> {warehouse!r}")
+        c.warehouse, c.name, c.slug = warehouse, name, slug
+    for field in ("tms_customer_no", "tms_tradelane_no"):
+        if field in data:
+            new = _clean(data[field]) or None
+            if new != getattr(c, field):
+                changes.append(f"{field}: {getattr(c, field)!r} -> {new!r}")
+                setattr(c, field, new)
+    if "is_active" in data and bool(data["is_active"]) != c.is_active:
+        c.is_active = bool(data["is_active"])
+        changes.append(f"is_active -> {c.is_active}")
+    if changes:
+        audit_svc.audit(session, actor_id, "client.update", c.name, "; ".join(changes))
+    session.commit()
+    return client_dict(c)
+
+
+# ── Depot addresses (per client: source depot name -> TMS address no.) ────────
+
+def address_dict(a: DepotAddress) -> dict:
+    return {"id": a.id, "client_id": a.client_id, "client_name": a.client.name,
+            "name": a.name, "tms_address_no": a.tms_address_no}
+
+
+def list_addresses(session, client_id=None):
+    q = session.query(DepotAddress).join(Client).order_by(Client.client_name, Client.warehouse,
+                                                          func.lower(DepotAddress.name))
+    if client_id:
+        q = q.filter(DepotAddress.client_id == client_id)
+    return {"addresses": [address_dict(a) for a in q],
+            "unmapped": address_svc.unmapped(session, client_id)}
+
+
+def _address_fields(session, client_id, data, exclude_id=None):
+    client = session.get(Client, client_id)
+    if not client:
+        raise ServiceError("Choose a client", 400)
+    name = _need(data.get("name"), "Depot name")
+    no = _need(data.get("tms_address_no"), "TMS address no.")
+    if len(no) > 60 or " " in no:
+        raise ServiceError("TMS address no. must be one word, e.g. 15609")
+    key = address_svc.address_key(name)
+    q = session.query(DepotAddress).filter_by(client_id=client.id, name_key=key)
+    if exclude_id:
+        q = q.filter(DepotAddress.id != exclude_id)
+    if q.first():
+        raise ServiceError(f'"{name}" is already mapped for {client.name} (names match ignoring case and spacing)', 409)
+    return client, name, no, key
+
+
+def create_address(session, actor_id, data):
+    client, name, no, key = _address_fields(session, data.get("client_id"), data)
+    a = DepotAddress(client_id=client.id, name=name, name_key=key, tms_address_no=no)
+    session.add(a)
+    audit_svc.audit(session, actor_id, "address.create", f"{client.name} / {name}", f"-> {no}")
+    session.commit()
+    return address_dict(a)
+
+
+def update_address(session, actor_id, address_id, data):
+    a = session.get(DepotAddress, address_id)
+    if not a:
+        raise ServiceError("Address not found", 404)
+    # The client is fixed once created (delete and re-add to move a mapping to another client).
+    client, name, no, key = _address_fields(session, a.client_id, data, exclude_id=a.id)
+    audit_svc.audit(session, actor_id, "address.update", f"{client.name} / {a.name}",
+                    f"{a.name!r}->{a.tms_address_no} => {name!r}->{no}")
+    a.name, a.name_key, a.tms_address_no = name, key, no
+    session.commit()
+    return address_dict(a)
+
+
+def delete_address(session, actor_id, address_id):
+    a = session.get(DepotAddress, address_id)
+    if not a:
+        raise ServiceError("Address not found", 404)
+    audit_svc.audit(session, actor_id, "address.delete", f"{a.client.name} / {a.name}", f"was -> {a.tms_address_no}")
+    session.delete(a)
+    session.commit()
+    return {"deleted": address_id}
+
+
+# ── Users ────────────────────────────────────────────────────────────────────
+
+def _user_dict(session, u: User) -> dict:
+    cred = u.tms_credential
+    return {
+        "id": u.id, "name": u.name, "username": u.username, "role": u.role,
+        "is_active": u.is_active, "created_at": _fmt(u.created_at),
+        "client_ids": [g.client_id for g in u.grants],
+        "grants": [{"client_id": g.client_id, "client_name": g.client.name} for g in u.grants],
+        # The password is never returned — only whether one is stored.
+        "tms": {"username": cred.tms_username, "status": cred.status,
+                "last_login_at": _fmt(cred.last_login_at)} if cred else None,
+    }
+
+
+def list_users(session, include_inactive=True):
+    q = session.query(User).order_by(User.name)
+    if not include_inactive:
+        q = q.filter(User.is_active.is_(True))
+    return [_user_dict(session, u) for u in q]
+
+
+def _set_grants(session, user: User, client_ids):
+    wanted = {int(i) for i in (client_ids or [])}
+    valid = {c.id for c in session.query(Client).filter(Client.id.in_(wanted))} if wanted else set()
+    if wanted - valid:
+        raise ServiceError("One or more clients do not exist")
+    current = {g.client_id: g for g in user.grants}
+    for cid, grant in current.items():
+        if cid not in wanted:
+            user.grants.remove(grant)
+    for cid in wanted - set(current):
+        user.grants.append(UserClientAccess(client_id=cid))
+
+
+def create_user(session, actor_id, data):
+    username = _need(data.get("username"), "Username")
+    if session.query(User).filter(func.lower(User.username) == username.lower()).first():
+        raise ServiceError("Username already taken", 409)
+    role = data.get("role") or "user"
+    if role not in ROLES:
+        raise ServiceError("Invalid role")
+    u = User(name=_need(data.get("name"), "Name"), username=username, role=role,
+             password_hash=hash_password(_check_password(data.get("password"))))
+    session.add(u)
+    session.flush()
+    if role == "user":
+        _set_grants(session, u, data.get("client_ids"))
+        if _clean(data.get("tms_username")) or data.get("tms_password"):
+            _apply_tms_credential(session, actor_id, u, data.get("tms_username"),
+                                  data.get("tms_password") or "")
+    audit_svc.audit(session, actor_id, "user.create", username, f"role={role}")
+    session.commit()
+    return _user_dict(session, u)
+
+
+def update_user(session, actor_id, user_id, data):
+    u = session.get(User, user_id)
+    if not u:
+        raise ServiceError("User not found", 404)
+    changes = []
+    if "name" in data:
+        u.name = _need(data["name"], "Name")
+    if "role" in data and data["role"] != u.role:
+        if data["role"] not in ROLES:
+            raise ServiceError("Invalid role")
+        if u.id == actor_id:
+            raise ServiceError("You cannot change your own role")
+        changes.append(f"role {u.role} -> {data['role']}")
+        u.role = data["role"]
+    if "is_active" in data and bool(data["is_active"]) != u.is_active:
+        if u.id == actor_id:
+            raise ServiceError("You cannot deactivate your own account")
+        u.is_active = bool(data["is_active"])
+        changes.append(f"is_active -> {u.is_active}")
+    if data.get("password"):
+        u.password_hash = hash_password(_check_password(data["password"]))
+        changes.append("password reset")
+    if "client_ids" in data:
+        _set_grants(session, u, data["client_ids"] if u.role == "user" else [])
+        changes.append("grants updated")
+    if u.role == "user" and (_clean(data.get("tms_username")) or data.get("tms_password")):
+        _apply_tms_credential(session, actor_id, u, data.get("tms_username") or
+                              (u.tms_credential.tms_username if u.tms_credential else ""),
+                              data.get("tms_password") or "")
+    if changes:
+        audit_svc.audit(session, actor_id, "user.update", u.username, "; ".join(changes))
+    session.commit()
+    return _user_dict(session, u)
+
+
+# ── TMS credentials ──────────────────────────────────────────────────────────
+
+def _apply_tms_credential(session, actor_id, u: User, username: str, password: str):
+    """Create or update u's TMS login (no commit). A blank password on an existing
+    credential keeps the stored one."""
+    username = _need(username, "TMS username")
+    cred = u.tms_credential
+    if not cred and not password:
+        raise ServiceError("TMS password is required")
+    if not cred:
+        session.add(TmsCredential(user_id=u.id, tms_username=username,
+                                  tms_password_enc=encrypt_secret(password)))
+    else:
+        changed = username != cred.tms_username or bool(password)
+        cred.tms_username = username
+        if password:
+            cred.tms_password_enc = encrypt_secret(password)
+        if changed:
+            # A new login invalidates the saved browser session and the old status.
+            cred.status = "untested"
+            if cred.session:
+                session.delete(cred.session)
+    audit_svc.audit(session, actor_id, "tms_credential.set", u.username,
+                     "password changed" if password else "username only")
+
+
+def set_tms_credential(session, actor_id, user_id, data):
+    u = session.get(User, user_id)
+    if not u:
+        raise ServiceError("User not found", 404)
+    _apply_tms_credential(session, actor_id, u, data.get("tms_username"), data.get("tms_password") or "")
+    session.commit()
+    return _user_dict(session, u)
+
+
+def delete_tms_credential(session, actor_id, user_id):
+    u = session.get(User, user_id)
+    if not u or not u.tms_credential:
+        raise ServiceError("No TMS credential stored for this user", 404)
+    session.delete(u.tms_credential)
+    audit_svc.audit(session, actor_id, "tms_credential.delete", u.username)
+    session.commit()
+    return _user_dict(session, u)
+
+
+# ── Audit ────────────────────────────────────────────────────────────────────
+
+def list_audit(session, limit=200):
+    rows = session.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit)
+    return [{"id": r.id, "actor": r.actor.username if r.actor else None, "action": r.action,
+             "target": r.target, "detail": r.detail, "created_at": _fmt(r.created_at)} for r in rows]
