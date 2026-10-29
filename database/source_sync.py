@@ -15,13 +15,17 @@ Source column -> our column
     client_ref, carrier, vessel_name, country_of_origin, country_of_destination, closing_date -> same name
     ata_date                       -> Shipment.depot_out_from
     pick_up_until                  -> Shipment.vgm_closing_date
+    Every value below can differ between the containers of a BL (the source says it per row): the shipment keeps the
+    first container's, a container that differs keeps its own (ShipmentContainer, same column names). A container on
+    several rows is one container: quantity and weight are added together.
     pick_up_from                   -> Shipment.depot_out_date  (the Depot Out line's Booked From, and Until)
                                       and Shipment.depot_in_date  (In Booked is always the same date as Out Booked)
     carrier + pickup_quay          -> Shipment.depot_out_reference (the "Out Ref"), by rule, see out_reference():
                                       MSC / HAPAG -> "SEE SCR", any other carrier -> "SEE CPU", but empty when the
                                       pickup_quay is 364ATO
-    empty_return_reference         -> Shipment.depot_in_reference
-    depot_out_address, depot_in_address -> same name (a container whose depot out differs keeps its own)
+    empty_return_reference         -> Shipment.depot_in_reference (the In Ref) and, when a container differs, its own
+    depot_out_address, depot_in_address -> same name; empty_return_reference -> depot_in_reference. The shipment takes
+                                      the first value; a container whose own value differs keeps it
     container_no/type, seal_no, goods, qty, gross_weight -> ShipmentContainer
     count                          -> not used
 
@@ -36,11 +40,12 @@ import os
 import re
 import sys
 import threading
-from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, text
 
 from database.models import Client, Shipment, ShipmentContainer
+from helpers.convert import clean_text, key as _key, parse_date, parse_number
+from helpers.shipment_rules import build_remarks, is_no_reference_quay, out_reference
 
 logger = logging.getLogger("source_sync")
 
@@ -59,8 +64,9 @@ SHIPMENT_MAP = {
     "depot_in_address": "depot_in_address",
 }
 CONTAINER_FIELDS = ["container_type", "seal_no", "goods", "qty", "gross_weight"]
-# depot columns that may differ per container: the shipment keeps the first one, a container that differs keeps its own
-PER_CONTAINER_DEPOTS = ["depot_out_address", "depot_in_address"]
+# Everything in SHIPMENT_MAP (except the ITOS number) plus the two derived values may differ per container of a BL:
+# the shipment keeps the first container's value, a container whose value differs keeps its own (same column name).
+PER_CONTAINER = [k for k in SHIPMENT_MAP if k != "itos_no"] + ["remarks", "depot_out_reference"]
 LOCKED_STATUSES = {"queued", "running", "done"}
 LIST_CAP = 200
 COMMIT_EVERY = 20
@@ -71,6 +77,10 @@ last_result: dict | None = None
 
 class SourceError(Exception):
     """The source could not be read (settings missing, unreachable, wrong table)."""
+
+
+class SourceBusy(SourceError):
+    """Another sync is running right now."""
 
 
 # ── reading the source ──────────────────────────────────────────────────────
@@ -113,61 +123,15 @@ def fetch_rows(pairs: list[tuple[str, str]]) -> list[dict]:
 
 # ── parsing one row ─────────────────────────────────────────────────────────
 
-PLACEHOLDERS = {"-", "--", "---", "n/a", "na", "null", "none", "nil"}    # how the source writes "nothing"
-
-
-def _txt(v):
-    if v is None:
-        return None
-    v = str(v).strip()
-    return None if not v or v.lower() in PLACEHOLDERS else v
-
-
-def _date(v):
-    if v is None or _txt(v) is None:
-        return None
-    if isinstance(v, datetime.datetime):
-        return v.date()
-    if isinstance(v, datetime.date):
-        return v
-    s = str(v).strip()
-    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y", "%d-%m-%Y"):
-        try:
-            return datetime.datetime.strptime(s[:19] if "%H" in fmt else s[:10], fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"not a date: {s!r}")
-
-
-def _num(v):
-    """A number as people write it: 1500, 1,500.5, 19.980.000, '13, 532. 000'. Raises ValueError if it is none."""
-    if v is None or _txt(v) is None:
-        return None
-    if isinstance(v, (int, float, Decimal)):
-        return Decimal(str(v))
-    s = re.sub(r"\s+", "", str(v))
-    if "," in s and "." in s:                      # the separator that comes last is the decimal point
-        dec = "," if s.rfind(",") > s.rfind(".") else "."
-        s = s.replace("." if dec == "," else ",", "").replace(dec, ".")
-    elif s.count(".") > 1:                         # 19.980.000 -> dots are thousands
-        s = s.replace(".", "")
-    elif "," in s:                                 # 1,500 -> thousands;  1,5 -> decimal comma
-        s = s.replace(",", "") if s.count(",") > 1 or len(s.rsplit(",", 1)[1]) == 3 else s.replace(",", ".")
-    try:
-        return Decimal(s)
-    except InvalidOperation:
-        raise ValueError(f"not a number: {v!r}")
-
-
 def parse_row(raw: dict, warn: list | None = None) -> dict:
     """Source row -> clean values. A missing or unreadable VALUE never rejects the row: it becomes empty (and is
     noted in `warn`) so the shipment still loads and a later sync fills it in once the source has it. Only a row
     that cannot be placed at all (no client, or neither BL nor ITOS number) raises ValueError."""
     warn = warn if warn is not None else []
-    r = {k: _txt(raw.get(k)) for k in COLUMNS if k not in ("pick_up_from", "pick_up_until", "closing_date",
+    r = {k: clean_text(raw.get(k)) for k in COLUMNS if k not in ("pick_up_from", "pick_up_until", "closing_date",
                                                            "ata_date", "qty", "gross_weight", "count")}
-    for k, conv in (("pick_up_from", _date), ("pick_up_until", _date), ("closing_date", _date), ("ata_date", _date),
-                    ("qty", _num), ("gross_weight", _num)):
+    for k, conv in (("pick_up_from", parse_date), ("pick_up_until", parse_date), ("closing_date", parse_date),
+                    ("ata_date", parse_date), ("qty", parse_number), ("gross_weight", parse_number)):
         try:
             r[k] = conv(raw.get(k))
         except ValueError as e:
@@ -183,10 +147,6 @@ def parse_row(raw: dict, warn: list | None = None) -> dict:
     r["warehouse"] = r["warehouse"] or ""
     r["container_no"] = r["container_no"].upper().replace(" ", "") if r["container_no"] else None
     return r
-
-
-def _key(s) -> str:
-    return (s or "").strip().lower()                # what the source query compares: lower(btrim(...))
 
 
 def _assign(obj, values: dict) -> bool:
@@ -223,7 +183,7 @@ def _group(rows, clients, result, per_client):
         try:
             r = parse_row(raw, result["warnings"])
         except ValueError as e:
-            _add(result["skipped"], {"row": n, "bl_number": _txt(raw.get("bl_number")), "reason": str(e)})
+            _add(result["skipped"], {"row": n, "bl_number": clean_text(raw.get("bl_number")), "reason": str(e)})
             continue
         client = clients.get((_key(r["client_name"]), _key(r["warehouse"])))
         if client is None:
@@ -241,53 +201,71 @@ def _add(lst: list, item) -> None:
         lst.append(item)
 
 
-_SCR_CARRIER = re.compile(r"(?<![A-Z])(MSC|HAPAG)(?![A-Z])")   # "MSC", "HAPAG", "HAPAG-LLOYD"; not "MSCX"
-NO_REFERENCE_QUAY = "364ATO"
+def _same(a, b) -> bool:
+    return _key(a) == _key(b) if isinstance(a, str) and isinstance(b, str) else a == b
 
 
-def out_reference(carrier: str | None, pickup_quay: str | None) -> str | None:
-    """The Depot Out reference: set by rule from the carrier, not copied from the source."""
-    if (pickup_quay or "").strip().upper() == NO_REFERENCE_QUAY:
-        return None
-    return "SEE SCR" if _SCR_CARRIER.search((carrier or "").upper()) else "SEE CPU"
+def _row_values(r) -> dict:
+    """What ONE source row says for every value that may differ per container."""
+    v = {col: r[src] for col, src in SHIPMENT_MAP.items() if col != "itos_no"}
+    v["remarks"] = build_remarks(v["vgm_closing_date"], v["closing_date"])
+    v["depot_out_reference"] = out_reference(v["carrier"], r["pickup_quay"])
+    return v
 
 
-def build_remarks(vgm: datetime.date | None, closing: datetime.date | None) -> str | None:
-    """"UITHALEN VOOR 04/11 – LEEG BINNEN 08/11": the empty is picked up before the VGM closing date and must be back
-    within the closing date. A part whose date is missing (or the source's 1900 placeholder) is left out."""
-    parts = []
-    if vgm and vgm.year >= 2000:
-        parts.append(f"UITHALEN VOOR {vgm:%d/%m}")
-    if closing and closing.year >= 2000:
-        parts.append(f"LEEG BINNEN {closing:%d/%m}")
-    return " – ".join(parts) or None
+def _merge_duplicates(bl, rows, result) -> list:
+    """A container on several rows of one BL (the source splits its goods over rows) is ONE container: quantity and
+    gross weight are added together, anything else the first row has empty is filled from the later ones."""
+    out, by_no, count = [], {}, {}
+    for r in rows:
+        cn = r["container_no"]
+        if not cn:
+            out.append(r)
+        elif cn not in by_no:
+            by_no[cn] = r
+            count[cn] = 1
+            out.append(r)
+        else:
+            first = by_no[cn]
+            count[cn] += 1
+            for k in ("qty", "gross_weight"):
+                if r[k] is not None:
+                    first[k] = r[k] + (first[k] or 0)
+            for k, v in r.items():
+                if first.get(k) is None and v is not None:
+                    first[k] = v
+    for cn, n in count.items():
+        if n > 1:
+            _add(result["warnings"], f"BL {bl}: container {cn} is on {n} rows — its quantity and weight are added together")
+    return out
 
 
-def _shipment_values(g, result) -> dict:
-    vals = {}
-    for col, src in SHIPMENT_MAP.items():
-        distinct = {r[src] for r in g["rows"] if r[src] is not None}
-        vals[col] = next((r[src] for r in g["rows"] if r[src] is not None), None)
-        if col not in PER_CONTAINER_DEPOTS and len(distinct) > 1:
-            _add(result["warnings"], f'BL {g["bl"]}: rows disagree on {src} ({", ".join(sorted(map(str, distinct)))}) '
-                                     f"— using {vals[col]}")
+def _shipment_values(bl, rows, result) -> dict:
+    """The shipment's own values: the first container's (rows are in container order), the default every other
+    container is compared with."""
+    vals = {"itos_no": next((r["itos_no"] for r in rows if r["itos_no"]), None)}
+    for col in PER_CONTAINER:
+        vals[col] = next((r["_v"][col] for r in rows if r["_v"][col] is not None), None)
     vals["remarks"] = build_remarks(vals["vgm_closing_date"], vals["closing_date"])
-    quays = [r["pickup_quay"] for r in g["rows"] if r["pickup_quay"]]
-    vals["depot_out_reference"] = out_reference(vals["carrier"], quays[0] if quays else None)
-    if len({q.strip().upper() == NO_REFERENCE_QUAY for q in quays}) > 1:
-        _add(result["warnings"], f'BL {g["bl"]}: pickup_quay is {NO_REFERENCE_QUAY} on some rows only — '
-                                 f'Out Ref follows the first one ({quays[0]})')
+    if len({r["_v"]["depot_out_reference"] is None for r in rows}) > 1:
+        _add(result["warnings"], f"BL {bl}: pickup_quay is 364ATO on some rows only — the Out Ref of those "
+                                 "containers follows the other rows")
     return vals
 
 
 def _sync_group(session, g, result) -> None:
     client, bl = g["client"], g["bl"]
-    values = _shipment_values(g, result)
+    # a stable order: the same first container (and so the same shipment values) on every sync
+    rows = sorted(g["rows"], key=lambda r: (r["container_no"] is None, r["container_no"] or ""))
+    rows = _merge_duplicates(bl, rows, result)
+    for r in rows:
+        r["_v"] = _row_values(r)
+    values = _shipment_values(bl, rows, result)
     shipment = (session.query(Shipment).filter(Shipment.client_id == client.id)
                 .filter(func.upper(Shipment.bl_number) == bl.upper()).first())
-    if shipment is None and not g["rows"][0].get("bl_missing"):
+    if shipment is None and not rows[0].get("bl_missing"):
         # an earlier sync had no BL yet and stored the shipment under its ITOS number: the BL has arrived, adopt it
-        itos = {r["itos_no"].upper() for r in g["rows"] if r["itos_no"]}
+        itos = {r["itos_no"].upper() for r in rows if r["itos_no"]}
         if itos:
             shipment = (session.query(Shipment).filter(Shipment.client_id == client.id)
                         .filter(func.upper(Shipment.bl_number).in_(itos)).first())
@@ -310,19 +288,17 @@ def _sync_group(session, g, result) -> None:
     existing = {c.container_no: c for c in shipment.containers}
     seen = set()
     no_number = 0
-    for r in g["rows"]:
+    for r in rows:
         cn = r["container_no"]
         if not cn:
             no_number += 1
             continue
-        if cn in seen:
-            _add(result["warnings"], f"BL {bl}: container {cn} appears twice — second row ignored")
-            continue
         seen.add(cn)
-        # a container whose own depot out differs from the shipment's keeps it; empty = same as the shipment
+        # what this container says; a value that is the shipment's too is not stored again (empty = the shipment's)
         cvals = {k: r[k] for k in CONTAINER_FIELDS}
-        for col in PER_CONTAINER_DEPOTS:
-            cvals[col] = r[col] if r[col] and _key(r[col]) != _key(values[col]) else None
+        for col in PER_CONTAINER:
+            v = r["_v"][col]
+            cvals[col] = v if v is not None and not _same(v, values[col]) else None
         c = existing.get(cn)
         if c is None:
             session.add(ShipmentContainer(shipment=shipment, container_no=cn, **cvals))
@@ -341,13 +317,20 @@ def _sync_group(session, g, result) -> None:
     result["shipments"][key] += 1
 
 
-def sync(session, rows: list[dict] | None = None, *, dry_run: bool = False) -> dict:
-    """Read the source (or use `rows`), load it, commit (or roll back for a dry run). Returns a summary."""
+def sync(session, rows: list[dict] | None = None, *, dry_run: bool = False, client: Client | None = None) -> dict:
+    """Read the source (or use `rows`), load it, commit (or roll back for a dry run). Returns a summary.
+    `client`: sync only that client (its page's Sync button) — the query asks the source for its rows alone;
+    without it every active client is synced (Admin)."""
     global last_result
     if not _lock.acquire(blocking=False):
-        raise SourceError("A sync is already running.")
+        raise SourceBusy("A sync is already running — try again in a moment.")
     try:
-        active = [c for c in session.query(Client).filter_by(is_active=True).all()]
+        if client is not None:
+            active = [client] if client.is_active else []
+            if not active:
+                raise SourceError(f"{client.name} is not active.")
+        else:
+            active = session.query(Client).filter_by(is_active=True).all()
         if rows is None and not active:
             raise SourceError("There are no active clients yet — add them in Admin → Clients first; only their "
                               "shipments are loaded from the source.")
@@ -378,7 +361,8 @@ def sync(session, rows: list[dict] | None = None, *, dry_run: bool = False) -> d
             session.rollback()
         else:
             session.commit()
-        last_result = result
+        if client is None:
+            last_result = result          # what Admin shows; one client's sync does not replace it
         logger.info("Source sync%s: %d rows, shipments %s, containers %s, %d skipped",
                     " (dry run)" if dry_run else "", result["fetched"], result["shipments"], result["containers"],
                     len(result["skipped"]))

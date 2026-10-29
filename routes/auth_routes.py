@@ -4,7 +4,7 @@ from database.db import SessionLocal
 from database.models import User
 from helpers import audit as audit_svc
 from helpers.decorators import login_required
-from database.seed import slugify
+from helpers.convert import slugify
 from helpers.jwt_utils import hash_password, issue_token, verify_password
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")

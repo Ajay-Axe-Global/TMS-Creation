@@ -334,7 +334,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // Addresses tab (per client)
+  // Addresses tab (one list for all clients)
   // ═══════════════════════════════════════════════════════════════════
   let addressesCache = [];
   let editingAddressId = null;
@@ -344,7 +344,6 @@
     $("address-form-title").textContent = "Add depot address";
     $("add-address-btn").textContent = "Add address";
     $("cancel-address-btn").style.display = "none";
-    $("address-client").disabled = false;
     $("address-name").value = $("address-no").value = "";
   }
   $("cancel-address-btn").addEventListener("click", resetAddressForm);
@@ -356,8 +355,6 @@
     $("address-form-title").textContent = `Edit depot: ${a.name}`;
     $("add-address-btn").textContent = "Update address";
     $("cancel-address-btn").style.display = "block";
-    $("address-client").value = a.client_id;
-    $("address-client").disabled = true;            // a mapping belongs to its client; delete + re-add to move it
     $("address-name").value = a.name;
     $("address-no").value = a.tms_address_no;
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -369,42 +366,25 @@
     try {
       const data = await api(isEdit ? `/api/admin/addresses/${editingAddressId}` : "/api/admin/addresses",
         { method: isEdit ? "PUT" : "POST",
-          body: { client_id: parseInt($("address-client").value, 10) || null,
-                  name: $("address-name").value.trim(), tms_address_no: $("address-no").value.trim() } });
-      showMsg(msg, isEdit ? `Updated "${data.name}".` : `Added "${data.name}" → ${data.tms_address_no} for ${data.client_name}.`, true);
-      const keepClient = $("address-client").value;
+          body: { name: $("address-name").value.trim(), tms_address_no: $("address-no").value.trim() } });
+      showMsg(msg, isEdit ? `Updated "${data.name}".` : `Added "${data.name}" → ${data.tms_address_no}.`, true);
       resetAddressForm();
-      $("address-client").value = keepClient;       // adding several depots for one client in a row
       await loadAddressesTab();
     } catch (e) { showMsg(msg, e.message, false); }
   });
 
-  $("addresses-filter-client").addEventListener("change", () => loadAddressesTab());
-
   async function loadAddressesTab() {
-    if (!clientsCache.length) clientsCache = await api("/api/admin/clients");
-    // Keep the chosen values across reloads.
-    const formClient = $("address-client").value;
-    const filterClient = $("addresses-filter-client").value;
-    $("address-client").innerHTML = clientsCache.filter(c => c.is_active)
-      .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-    $("addresses-filter-client").innerHTML = `<option value="">All clients</option>` +
-      clientsCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-    if (formClient) $("address-client").value = formClient;
-    $("addresses-filter-client").value = filterClient;
-
-    const data = await api("/api/admin/addresses" + (filterClient ? `?client_id=${filterClient}` : ""));
+    const data = await api("/api/admin/addresses");
     addressesCache = data.addresses;
     $("addr-stat-mapped").textContent = data.addresses.length.toLocaleString();
     $("addr-stat-unmapped").textContent = data.unmapped.length.toLocaleString();
 
     $("unmapped-panel").style.display = data.unmapped.length ? "block" : "none";
     $("unmapped-list").innerHTML = data.unmapped.map((u, i) =>
-      `<span class="chip" style="cursor:pointer" data-unmapped="${i}">${esc(u.client_name)} · ${esc(u.name)}</span>`).join("");
+      `<span class="chip" style="cursor:pointer" data-unmapped="${i}">${esc(u.name)}</span>`).join("");
     document.querySelectorAll("[data-unmapped]").forEach(chip => chip.addEventListener("click", () => {
       const u = data.unmapped[+chip.dataset.unmapped];
       resetAddressForm();
-      $("address-client").value = u.client_id;
       $("address-name").value = u.name;
       $("address-no").focus();
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -413,7 +393,6 @@
     document.querySelector("#addresses-table tbody").innerHTML = data.addresses.length
       ? data.addresses.map(a => `
         <tr>
-          <td>${esc(a.client_name)}</td>
           <td>${esc(a.name)}</td>
           <td class="mono">${esc(a.tms_address_no)}</td>
           <td><div class="row-actions">
@@ -421,13 +400,13 @@
             <button class="danger" data-delete-address="${a.id}">Delete</button>
           </div></td>
         </tr>`).join("")
-      : emptyRow(4, "No depot addresses yet.");
+      : emptyRow(3, "No depot addresses yet.");
 
     document.querySelectorAll("[data-edit-address]").forEach(b =>
       b.addEventListener("click", () => startEditAddress(+b.dataset.editAddress)));
     document.querySelectorAll("[data-delete-address]").forEach(b => b.addEventListener("click", async () => {
       const a = addressesCache.find(x => x.id === +b.dataset.deleteAddress);
-      if (!confirm(`Delete "${a.name}" → ${a.tms_address_no} for ${a.client_name}? Its shipments using this depot will show as not mapped.`)) return;
+      if (!confirm(`Delete "${a.name}" → ${a.tms_address_no}? Shipments using this depot will show as not mapped.`)) return;
       try { await api(`/api/admin/addresses/${a.id}`, { method: "DELETE" }); await loadAddressesTab(); }
       catch (e) { alert(e.message); }
     }));

@@ -1373,10 +1373,8 @@
       <div class="grid-2">
         <div class="panel">
           <h2 id="address-form-title">Add depot address</h2>
-          <p class="panel-sub">the source gives a depot name; TMS needs its address no. Each client has its own list,
-            used for both depot in and depot out. Names match ignoring case and spacing.</p>
-          <label for="address-client">Client</label>
-          <select class="form-input" id="address-client"></select>
+          <p class="panel-sub">the source gives a depot name; TMS needs its address no. One list for every client,
+            used for both depot in and depot out. Names match ignoring case, spacing and punctuation.</p>
           <label for="address-name">Depot name (as written in the source)</label>
           <input id="address-name" placeholder="e.g. DR DEPORT" autocomplete="off" />
           <label for="address-no">TMS address no.</label>
@@ -1400,22 +1398,16 @@
 
       <div class="panel full" id="unmapped-panel" style="margin-bottom:20px;display:none">
         <h2>Not mapped yet</h2>
-        <p class="panel-sub">a client's shipments using these depots cannot be sent until each has an address no. for that client — click one to add it</p>
+        <p class="panel-sub">shipments using these depots cannot be sent until each has an address no. — click one to add it</p>
         <div class="grant-chips" id="unmapped-list"></div>
       </div>
 
       <div class="panel full">
         <h2 style="margin-bottom:16px">Depot addresses</h2>
-        <div class="filter-row">
-          <select id="addresses-filter-client">
-            <option value="">All clients</option>
-          </select>
-        </div>
         <div class="table-scroll">
           <table id="addresses-table">
             <thead>
               <tr>
-                <th>Client</th>
                 <th>Depot name</th>
                 <th>TMS address no.</th>
                 <th></th>

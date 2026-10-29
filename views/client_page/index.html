@@ -104,6 +104,12 @@
   }
   #create-btn:hover:not(:disabled) { opacity: .92; }
   #create-btn:disabled { opacity: .35; cursor: not-allowed; }
+  #sync-btn {
+    background: #172033; border: 1px solid #334155; color: #cbd5e1; border-radius: 9px; padding: 9px 18px;
+    font-weight: 700; font-size: 12.5px; cursor: pointer; font-family: inherit; transition: border-color .15s;
+  }
+  #sync-btn:hover:not(:disabled) { border-color: #3b82f6; }
+  #sync-btn:disabled { opacity: .5; cursor: progress; }
 
   /* ── Table ── */
   .tracking-table-wrap {
@@ -299,6 +305,7 @@
       </div>
       <div class="toolbar-actions">
         <div class="counts" id="counts"></div>
+        <button type="button" id="sync-btn" title="Load the latest shipments of this client from the source">Sync</button>
         <button type="button" id="create-btn" disabled>Create</button>
       </div>
     </div>
@@ -503,6 +510,10 @@
         }
 
         let n = 0, containers = 0;
+        // Values the source gives each container of a BL separately: the container's own, else the shipment's. A value
+        // that is the container's own is bright; one it shares with the shipment is dimmed on the continuation rows.
+        const per = (c, s, k) => c ? c[k] : s[k];
+        const cls = (c, k, base) => c && c.own && c.own.includes(k) ? base : (base + " ship").trim();
         $("rows").innerHTML = shown.map(s => {
           const all = s.containers.length ? s.containers : [null];    // a shipment with no containers still shows
           containers += s.containers.length;
@@ -519,30 +530,30 @@
               ${cell("Customer No", s.customer_no, "mono ship nowrap")}
               ${cell("Trade Lane", s.tradelane_no, "mono ship nowrap")}
               ${cell("ITOS", s.itos_no, "mono ship")}
-              ${cell("Client Ref", s.client_ref, "ship")}
-              ${cell("ATA", fmtDate(s.ata_date), "mono ship nowrap")}
-              ${cell("Carrier", s.carrier, "ship")}
+              ${cell("Client Ref", per(c, s, "client_ref"), cls(c, "client_ref", ""))}
+              ${cell("ATA", fmtDate(per(c, s, "ata_date")), cls(c, "depot_out_from", "mono nowrap"))}
+              ${cell("Carrier", per(c, s, "carrier"), cls(c, "carrier", ""))}
               ${first ? countCell(s, multi, open) : blank("Count")}
               ${cell("Container No", c && c.container_no, "mono")}
               ${cell("Type", c && c.container_type)}
               ${cell("Seal", c && c.seal_no, "mono")}
-              ${cell("Vessel", s.vessel_name, "ship nowrap")}
+              ${cell("Vessel", per(c, s, "vessel_name"), cls(c, "vessel_name", "nowrap"))}
               ${cell("BL", s.bl_number, "mono ship")}
               ${cell("File No", s.tms_file_no, "mono ship")}
               ${tmsCell(s, c, i)}
               ${first ? filesCell(s) : blank("Files")}
-              ${cell("Depot Out From", fmtDate(s.depot_out_from), "mono ship nowrap")}
-              ${cell("VGM Closing", fmtDate(s.vgm_closing_date), "mono ship nowrap")}
+              ${cell("Depot Out From", fmtDate(per(c, s, "depot_out_from")), cls(c, "depot_out_from", "mono nowrap"))}
+              ${cell("VGM Closing", fmtDate(per(c, s, "vgm_closing_date")), cls(c, "vgm_closing_date", "mono nowrap"))}
               ${cell("Depot Out", c ? c.depot_out : s.depot_out, c && c.depot_out_own ? "mono nowrap" : "mono ship nowrap")}
-              ${cell("Out Ref", s.depot_out_reference, "ship nowrap")}
-              ${cell("Out Booked", fmtDate(s.depot_out_date), "mono ship nowrap")}
+              ${cell("Out Ref", per(c, s, "depot_out_reference"), cls(c, "depot_out_reference", "nowrap"))}
+              ${cell("Out Booked", fmtDate(per(c, s, "depot_out_date")), cls(c, "depot_out_date", "mono nowrap"))}
               ${cell("Depot In", c ? c.depot_in : s.depot_in, c && c.depot_in_own ? "mono nowrap" : "mono ship nowrap")}
-              ${cell("In Ref", s.depot_in_reference, "ship nowrap")}
-              ${cell("In Booked", fmtDate(s.depot_in_date), "mono ship nowrap")}
+              ${cell("In Ref", c ? c.depot_in_reference : s.depot_in_reference, c && c.depot_in_reference_own ? "nowrap" : "ship nowrap")}
+              ${cell("In Booked", fmtDate(per(c, s, "depot_in_date")), cls(c, "depot_in_date", "mono nowrap"))}
               ${cell("Goods", c && c.goods, "mono nowrap")}
               ${cell("Qty", c && c.qty, "num")}
               ${cell("Weight", c && c.gross_weight, "num")}
-              ${cell("Remarks", s.remarks, "ship nowrap")}
+              ${cell("Remarks", per(c, s, "remarks"), cls(c, "remarks", "nowrap"))}
               ${first ? statusCell(s) : '<td class="status-col blank" data-label="Status"></td>'}
             </tr>`;
           }).join("");
@@ -654,6 +665,27 @@
         } catch (e) {
           notice($("notice"), "err", esc(e.message));
         }
+        await refresh();
+      });
+
+      // ── Sync: load this client's shipments from the source, then show them ──
+      $("sync-btn").addEventListener("click", async () => {
+        const btn = $("sync-btn");
+        btn.disabled = true; btn.textContent = "Syncing…";
+        notice($("notice"), "info", "Loading the latest shipments from the source…");
+        try {
+          const r = await api(`${base}/sync`, { method: "POST" });
+          const sh = r.shipments;
+          const parts = [`Synced: <strong>${sh.created}</strong> new, <strong>${sh.updated}</strong> updated, ${sh.unchanged} unchanged` +
+                         (sh.locked ? `, ${sh.locked} not edited (already queued or created in TMS)` : "") + "."];
+          if (!r.fetched) parts.push("The source has no rows for this client — ask an administrator to check its name and warehouse.");
+          if (r.skipped.length) parts.push(`${r.skipped.length} row(s) could not be loaded.`);
+          if (r.warnings.length) parts.push(`<details><summary>${r.warnings.length} note(s) about the source data</summary><ul>${r.warnings.slice(0, 30).map(w => `<li>${esc(w)}</li>`).join("")}</ul></details>`);
+          notice($("notice"), !r.fetched || r.skipped.length ? "warn" : "ok", parts.map(x => `<div>${x}</div>`).join(""));
+        } catch (e) {
+          notice($("notice"), "err", esc(e.message));
+        }
+        btn.disabled = false; btn.textContent = "Sync";
         await refresh();
       });
 

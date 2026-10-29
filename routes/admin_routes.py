@@ -62,7 +62,7 @@ def lookups_list(session, actor):
 @bp.route("/addresses", methods=["GET"])
 @api
 def addresses_list(session, actor):
-    return service.list_addresses(session, request.args.get("client_id", type=int))
+    return service.list_addresses(session)
 
 
 @bp.route("/addresses", methods=["POST"])

@@ -22,15 +22,13 @@ Settings (.env):
     TMS_CREATE_ENABLED   see above (default false)
     TMS_POLL_SECONDS     how often an idle worker looks for work (default 2)
 """
-import importlib
 import logging
 import os
 from pathlib import Path
 
 from database.db import SessionLocal
 from database.models import JobArtifact, JobLog, TmsJob
-from database.seed import slugify
-from helpers import jobs, shipment_files, tms_login, tms_nav
+from helpers import flows, jobs, order_builder, shipment_files, tms_login, tms_nav
 from helpers.flow_errors import FlowFailed, FlowNotReady
 
 logger = logging.getLogger("tms_worker")
@@ -52,15 +50,6 @@ def headless() -> bool:
 
 
 # ── one job ──────────────────────────────────────────────────────────────────
-
-def _load_flow(job: TmsJob):
-    """clients/<customer slug>.py — the per-customer order-filling code."""
-    flow_slug = slugify(job.payload["client"]["client_name"])
-    try:
-        return importlib.import_module(f"clients.{flow_slug}")
-    except ImportError:
-        raise FlowNotReady(f"There is no TMS order flow for {job.payload['client']['client_name']} yet.")
-
 
 def _evidence(db, job: TmsJob, page) -> None:
     """Failure screenshot, saved under uploads/jobs/<id>/ and recorded as an artifact."""
@@ -171,7 +160,8 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
 
         job.stage = "card"
         db.commit()
-        result = _load_flow(job).create_order(page, frame, job.payload, emit)
+        flow = flows.require(job.payload["client"]["client_name"])      # clients/<customer>/<customer>.py
+        result = order_builder.create_order(page, frame, job.payload, emit, flow)
         _store_flow_log(db, job, result.pop("log", []))
         warnings = result.pop("warnings", [])
         _store_result(db, job, result)

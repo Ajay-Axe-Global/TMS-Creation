@@ -83,6 +83,19 @@ REQUIRED = {                                   # Lines check: columns that must 
     "DEPOT IN":  ["Address No.", "Address Name", "Order Line Ref 1", "Booked DateTime From", "Closing Date Time"],
     "*":         ["Address No.", "Address Name"],
 }
+# General fields a copied order may have to differ in (data key -> label, field id, how it is typed): the same fields
+# general_tab fills, corrected on the Edit card of an order whose container has its own value
+PER_ORDER_GENERAL = {
+    "customerRef": ("Customer Ref.", "ShortcutReference1Code", {}),
+    "bookingRef": ("Booking Ref.", "ShortcutReference2Code", {}),
+    "vesselName": ("Vessel Name (Import)", "Go4CTR Vessel Name Import", {}),
+    "countryOrigin": ("Country Of Origin", "CountryOfOrigin", {"lookup": True, "vat": True}),
+    "countryDest": ("Country Of Destination", "CountryOfDestination", {"lookup": True, "vat": True}),
+    "closingDatetime": ("Closing Datetime", "Go4CTR Closing DateTime", {"date": True}),
+    "carrier": ("Carrier", "Go4CTR Carrier No", {"lookup": True}),
+    "depotOutFrom": ("Depot Out From", "Go4CTR Depot Out From", {"date": True}),
+    "vgmClosingDate": ("VGM Closing", "Go4CTR VGM Closing", {"date": True}),
+}
 _BC_MARKERS = ('.ms-nav-edit-control-container, button[aria-label="Add a new filter on a field"], '
                'a[title^="Open record"]')
 _CARD_NO_SELECTORS = (".secondary-row--OKG79b9vwIblz3DS .title--m8MvvpvUuMfMrmvJ",
@@ -786,6 +799,11 @@ class Creation:
                 self.L("Lines", Line=ln["action"], Status="ROW NOT FOUND")
                 continue
             key = row.get_attribute("rowkey")
+            if norm(ln["action"]) == "unload":
+                # TMS fills the UNLOAD row's address itself; only its booked dates are entered (the Depot Out date)
+                self.type_booked("UNLOAD", cap, key, "From", ln.get("bookedFrom"))
+                self.type_booked("UNLOAD", cap, key, "Until", ln.get("bookedUntil"))
+                continue
             val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
             self.step("Lines", ln["action"], cap, key, "Address No.", ln.get("addressNo"), lookup=True, settle=0.6,
                       extra=lambda v=val: f"{v('Address Name')} / {v('Address City')}",
@@ -799,6 +817,129 @@ class Creation:
         self.close_date_picker()
         self.blur_active()
         self.wait(1.0)
+
+    # The UNLOAD row's dates are typed into the cell found by its control name (BookedDateTimeFrom / ...Until): click the
+    # cell, type, Tab. If that does not take, the same value is set by script (native setter + input / change / Enter),
+    # and last of all by the column-based typing the other rows use.
+    _BOOKED_JS = """([key, control, value]) => {
+      const grid = document.querySelector('table[data-pwgrid="Lines"]');
+      const row = grid && grid.querySelector('tbody tr[rowkey="' + key + '"]');
+      const input = row && row.querySelector('[controlname="' + control + '"] input');
+      if (!input) return false;
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+      return true; }"""
+
+    def type_booked(self, line, cap, key, which, value):
+        if not value:
+            return
+        abbr, control = f"Booked DateTime {which}", f"BookedDateTime{which}"
+        shown = lambda: self.cell_text(self.cell(cap, key, abbr))
+        took = lambda: norm(value) in norm(shown())
+        how = None
+        try:
+            idx = self.col_idx(cap, abbr)
+            if idx >= 0:
+                self.activate_row(cap, key, idx)
+            cell = self.row_by_key(cap, key).locator(f'[controlname="{control}"]').first
+            if cell.count():
+                cell.click(timeout=3000)
+                inp = self.until(lambda: self.editable_in(cell), 3.0)
+                if inp:
+                    self.type_text(inp, value)
+                    self.pg.keyboard.press("Tab")
+                    self.wait(0.4)
+                    self.close_date_picker()
+                    how = "control" if self.until(took, 2.0) else None
+        except Exception:
+            how = None
+        if how is None:
+            try:
+                if self.f.evaluate(self._BOOKED_JS, [key, control, value]):
+                    self.wait(0.6)
+                    self.close_date_picker()
+                    how = "script" if self.until(took, 2.0) else None
+            except Exception:
+                how = None
+        if how is None:
+            self.step("Lines", line, cap, key, abbr, value, settle=0.6)       # the column-based typing; logs itself
+            return
+        self.L("Lines", Line=line, Field=abbr, Value=value, Actual=shown(), Extra=how, Status="OK")
+
+    # ── Order Remarks ───────────────────────────────────────────────────────
+
+    _REMARKS_JS = """(text) => {
+      const grid = document.querySelector('table[data-pwgrid="Order Remarks"]') || document.querySelector('#BusinessGrid_bd2b');
+      const row = grid && grid.querySelector('tbody tr[rowkey]');
+      const input = row && row.querySelector('[controlname="Remarks"] input');
+      if (!input) return false;
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
+      return true; }"""
+
+    def open_remarks(self):
+        """Open the Order Remarks section when it is collapsed (after the Cargo step it often is); True when its grid shows."""
+        cap = "Order Remarks"
+        if self.grid(cap):
+            return True
+        head = self.f.locator(".ms-nav-band-caption [role=button]").filter(has=self.f.locator('[title="Order Remarks"]')).first
+        if head.count():
+            if (head.get_attribute("aria-expanded") or "") == "false":
+                head.click()
+                self.L("Pane", Field=cap, Status="OK — opened (it was collapsed)")
+            return bool(self.until(lambda: self.grid(cap), 10.0))
+        return self.ensure_pane(cap, lambda: self.grid(cap))
+
+    def set_remarks(self, text):
+        """Type `text` into the Remarks cell of the Order Remarks grid's first row (replacing what is there)."""
+        cap = "Order Remarks"
+        if not self.open_remarks():
+            self.L("Remarks", Status="Order Remarks section not found")
+            return
+        self.grid(cap).scroll_into_view_if_needed()
+        self.wait(0.4)
+        rows = self.rows(cap)
+        shown = lambda: self.cell_text(self.cell(cap, rows[0].get_attribute("rowkey"), "Remarks")) if rows else ""
+        how = None
+        try:
+            if rows:
+                key = rows[0].get_attribute("rowkey")
+                idx = self.col_idx(cap, "Remarks")
+                if idx >= 0:
+                    self.activate_row(cap, key, idx)
+                cell = rows[0].locator('[controlname="Remarks"]').first
+                cell.click(timeout=3000)
+                inp = self.until(lambda: self.editable_in(cell), 3.0)
+                if inp:
+                    self.type_text(inp, text)
+                    self.pg.keyboard.press("Tab")
+                    self.wait(0.5)
+                    how = "control" if self.until(lambda: norm(shown()) == norm(text), 2.0) else None
+        except Exception:
+            how = None
+        if how is None:
+            try:
+                if self.f.evaluate(self._REMARKS_JS, text):
+                    self.wait(0.6)
+                    how = "script" if self.until(lambda: norm(shown()) == norm(text), 2.0) else None
+            except Exception:
+                how = None
+        self.L("Remarks", Field="Remarks", Value=text, Actual=shown(), Extra=how or "",
+               Status="OK" if how else "CHECK — the remark was not confirmed in the grid")
+
+    def remarks_tab(self, text):
+        if not text:
+            return
+        self.head("4b) ORDER REMARKS")
+        self.set_remarks(text)
+        self.blur_active()
+        self.wait(0.8)
 
     def cargo_tab(self, cargo):
         self.head("4) ORDER CARGO")
@@ -963,8 +1104,10 @@ class Creation:
         if not ok.count():
             raise _Stop("OK button not found in Copy Order dialog")
         ok.click()
-        closed = self.until(lambda: not self.copy_form(), 20.0, 0.1)
-        self.L("Copy", Field="OK", Status="Dialog closed" if closed else "CHECK — dialog still open")
+        # OK is done once the Copy dialog is gone OR the "TMS Copy Orders Overviews" panel is showing: BC opens that
+        # panel on top and can leave the Copy form in the page underneath it, so "form gone" alone is not reliable.
+        closed = self.until(lambda: not self.copy_form() or self.overview_dlg(), 20.0, 0.1)
+        self.L("Copy", Field="OK", Status="Copies made" if closed else "CHECK — dialog still open")
         if not closed:
             raise _Stop("Copy Order dialog did not close after OK")
 
@@ -1384,6 +1527,25 @@ class Creation:
         tmpl_in = (lines.get("DEPOT IN") or {}).get("addressNo") or ""
         if c.get("depotInNo") and c["depotInNo"] != tmpl_in:
             changes["depot_in"] = c["depotInNo"]
+        tmpl_in_ref = (lines.get("DEPOT IN") or {}).get("ref1") or ""
+        if c.get("depotInRef") and c["depotInRef"] != tmpl_in_ref:
+            changes["depot_in_ref"] = c["depotInRef"]
+        out_line, in_line = lines.get("DEPOT OUT") or {}, lines.get("DEPOT IN") or {}
+        if c.get("depotOutRef") and c["depotOutRef"] != (out_line.get("ref1") or ""):
+            changes["depot_out_ref"] = c["depotOutRef"]
+        if c.get("depotOutDate") and c["depotOutDate"] != (out_line.get("bookedFrom") or ""):
+            changes["depot_out_date"] = c["depotOutDate"]
+            if out_line.get("bookedUntil"):                  # Out Booked is both From and Until
+                changes["depot_out_until"] = c["depotOutDate"]
+        if c.get("depotInDate") and c["depotInDate"] != (in_line.get("bookedFrom") or ""):
+            changes["depot_in_date"] = c["depotInDate"]
+        if "UNLOAD" in lines and "depot_out_date" in changes:        # UNLOAD takes the Depot Out date
+            changes["unload_date"] = changes["unload_until"] = changes["depot_out_date"]
+        if c.get("remarks") and c["remarks"] != str(self.data.get("remarks") or ""):
+            changes["remarks"] = c["remarks"]
+        for key, value in (c.get("general") or {}).items():
+            if value and value != str(self.data.get(key) or ""):
+                changes["general:" + key] = value
         for key, dkey in (("goodNo", "goodNo"), ("quantity", "quantity"), ("grossWeight", "grossWeight")):
             if str(c.get(key) or "") != str(cargo.get(dkey) or "") and c.get(key):
                 changes[key] = str(c[key])
@@ -1405,9 +1567,24 @@ class Creation:
             return
         self.step(section, line, caption, key, abbr, value, lookup=lookup, settle=0.6, extra=extra, check=check)
 
+    def apply_general(self, changes):
+        """Correct this order's General fields (customer ref, vessel, dates ...) to its own container's values."""
+        for key, (label, cn, opts) in PER_ORDER_GENERAL.items():
+            if "general:" + key in changes:
+                self.fill(label, cn, changes["general:" + key], **opts)
+
     def apply_changes(self, changes):
         """Correct this order's Lines / Order Cargo to its own container's values. Returns True if anything changed."""
-        for change, action in (("depot_out", "DEPOT OUT"), ("depot_in", "DEPOT IN")):
+        # (change, Lines action, the column corrected, is it a lookup): the address first, then the reference
+        for change, action, abbr, lookup in (("depot_out", "DEPOT OUT", "Address No.", True),
+                                             ("depot_in", "DEPOT IN", "Address No.", True),
+                                             ("depot_out_ref", "DEPOT OUT", "Order Line Ref 1", False),
+                                             ("depot_in_ref", "DEPOT IN", "Order Line Ref 1", False),
+                                             ("depot_out_date", "DEPOT OUT", "Booked DateTime From", False),
+                                             ("depot_out_until", "DEPOT OUT", "Booked DateTime Until", False),
+                                             ("unload_date", "UNLOAD", "Booked DateTime From", False),
+                                             ("unload_until", "UNLOAD", "Booked DateTime Until", False),
+                                             ("depot_in_date", "DEPOT IN", "Booked DateTime From", False)):
             if change not in changes:
                 continue
             cap = "Lines"
@@ -1421,9 +1598,14 @@ class Creation:
             else:
                 key = row.get_attribute("rowkey")
                 val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
-                self.replace_cell("Lines", action, cap, key, "Address No.", changes[change], lookup=True,
-                                  extra=lambda v=val: f"{v('Address Name')} / {v('Address City')}",
-                                  check=lambda v=val, n=changes[change]: norm(v("Address No.")) == norm(n) and norm(v("Address Name")))
+                if lookup:
+                    self.replace_cell("Lines", action, cap, key, abbr, changes[change], lookup=True,
+                                      extra=lambda v=val: f"{v('Address Name')} / {v('Address City')}",
+                                      check=lambda v=val, n=changes[change]: norm(v("Address No.")) == norm(n) and norm(v("Address Name")))
+                else:
+                    # a reference is read back from the grid; a date shows in the grid's own format, so it is not compared
+                    check = (lambda v=val, n=changes[change]: norm(v(abbr)) == norm(n)) if abbr == "Order Line Ref 1" else None
+                    self.replace_cell("Lines", action, cap, key, abbr, changes[change], check=check)
         if any(k in changes for k in ("goodNo", "quantity", "grossWeight")):
             cap = "Order Cargo"
             self.ensure_pane(cap, lambda: self.grid(cap))
@@ -1444,6 +1626,8 @@ class Creation:
                     self.replace_cell("Cargo", 1, cap, key, "Quantity", changes["quantity"])
                 if "grossWeight" in changes:
                     self.replace_cell("Cargo", 1, cap, key, "Gross Weight", changes["grossWeight"])
+        if "remarks" in changes:
+            self.set_remarks(changes["remarks"])
         self.close_date_picker()
         self.blur_active()
         self.wait(1.0)
@@ -1457,6 +1641,7 @@ class Creation:
         changes = self.wanted_changes(container) if len(self.containers) > 1 else {}
         if changes:
             self.L("Edit", Field="Differs from the first order", Value=", ".join(sorted(changes)), Status="OK")
+            self.apply_general(changes)
             self.apply_changes(changes)
             if self.job.get("recalcChanged", True):      # revenues depend on the address and the cargo
                 try:
@@ -1541,7 +1726,8 @@ class Creation:
 
         for name, section, fn in (("attach", "File", lambda: self.attach_files(self.data.get("files") or [])),
                                   ("lines", "Lines", lambda: self.lines_tab(self.data.get("lines") or [])),
-                                  ("cargo", "Cargo", lambda: self.cargo_tab(self.data.get("cargo") or []))):
+                                  ("cargo", "Cargo", lambda: self.cargo_tab(self.data.get("cargo") or [])),
+                                  ("remarks", "Remarks", lambda: self.remarks_tab(self.data.get("remarks")))):
             try:
                 fn()
             except FlowFailed:
@@ -1606,7 +1792,7 @@ def run(page, frame, job, log=None) -> dict:
 
 
 # Log statuses that are fine; anything else is something that did not go in as intended.
-_BENIGN_STATUS = ("OK", "Clicked", "Dialog closed", "SKIPPED (no file)", "DISABLED")   # DISABLED: BC greys a Copy toggle out itself
+_BENIGN_STATUS = ("OK", "Clicked", "Dialog closed", "Copies made", "SKIPPED (no file)", "DISABLED")   # DISABLED: BC greys a Copy toggle out itself
 
 
 def warnings_from(rows) -> list[str]:

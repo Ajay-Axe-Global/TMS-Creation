@@ -9,7 +9,7 @@ Layout
   User ──1 TmsCredential ──1 BrowserSession
   Client ──< Shipment ──< ShipmentContainer     one shipment per ITOS number
   Shipment ──1 ShipmentFile                     the one document dropped on its row (the TMS attachment)
-  Client ──< DepotAddress                       depot name (as in the source) -> TMS address no., per client
+  DepotAddress                                  depot name (as in the source) -> TMS address no., one list for all
   Shipment ──< TmsJob ──< JobLog / JobArtifact
 """
 import datetime
@@ -135,24 +135,19 @@ class BrowserSession(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DepotAddress(Base):
-    """Maps a depot name as written in the source ("DR DEPORT", "VMR - 1147") to the
-    TMS address no. typed into the Lines tab (15609, 765) — per CLIENT, so each client
-    has its own list and the same depot name may map to a different no. for another
-    client. Used for both depot-in and depot-out. Shipments keep the NAME as text and it
-    is matched on (client, name_key) (helpers/addresses.py) when shown and when a job is
-    triggered, so adding or fixing a mapping later never leaves a stale link behind."""
+    """Maps a depot name as written in the source ("DR DEPORT", "ACC1 234") to the TMS address no. typed into the Lines
+    tab (15609, 70289). ONE list for every client — they all use the same TMS — for both depot in and depot out.
+    Shipments keep the NAME as text and it is matched on name_key (helpers/addresses.py) when shown and when a job
+    is triggered, so adding or fixing a mapping later never leaves a stale link behind."""
     __tablename__ = "depot_addresses"
-    __table_args__ = (UniqueConstraint("client_id", "name_key", name="uq_depot_client_key"),)
+    __table_args__ = (UniqueConstraint("name_key", name="uq_depot_key"),)
 
     id = Column(Integer, primary_key=True)
-    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     name_key = Column(String(255), nullable=False)    # normalised name, see helpers/addresses.py
     tms_address_no = Column(String(60), nullable=False)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
-
-    client = relationship("Client")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,6 +229,23 @@ class ShipmentContainer(Base):
     depot_out_address = Column(String(255), nullable=True)
     # Same for Depot In (the source gives each container its own): empty = same as the shipment's.
     depot_in_address = Column(String(255), nullable=True)
+    # Same for the Depot In reference ("In Ref"): the source gives each container its own; empty = the shipment's.
+    depot_in_reference = Column(String(120), nullable=True)
+    # Everything else the source may give a container differently from the other containers of its BL (another vessel,
+    # ATA, client ref ...). The shipment keeps the first container's value; a container whose value differs keeps its
+    # own here, empty = the shipment's. The TMS order of that container is corrected to it.
+    client_ref = Column(String(120), nullable=True)
+    carrier = Column(String(60), nullable=True)
+    vessel_name = Column(String(120), nullable=True)
+    country_of_origin = Column(String(10), nullable=True)
+    country_of_destination = Column(String(10), nullable=True)
+    closing_date = Column(Date, nullable=True)
+    depot_out_from = Column(Date, nullable=True)          # the ATA
+    vgm_closing_date = Column(Date, nullable=True)
+    depot_out_date = Column(Date, nullable=True)          # Out Booked
+    depot_in_date = Column(Date, nullable=True)           # In Booked
+    depot_out_reference = Column(String(120), nullable=True)
+    remarks = Column(String(255), nullable=True)
 
     # TMS result: this container's own order number
     tms_order_no = Column(String(60), nullable=True)

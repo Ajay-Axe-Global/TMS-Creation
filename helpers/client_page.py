@@ -1,9 +1,10 @@
 """
-The customer page and its API, the same for every customer — a client file (clients/<customer>.py) only
+The customer page and its API, the same for every customer — a client file (clients/<customer>/<customer>.py) only
 calls make_blueprint("<customer>") to get it.
 
     GET    /app/<customer>/<client_slug>/                          the page
     GET    /app/<customer>/<client_slug>/data                      shipments, containers, status, files (JSON)
+    POST   /app/<customer>/<client_slug>/sync                      load this client's shipments from the source DB
     POST   /app/<customer>/<client_slug>/create                    queue the selected shipments for TMS
     POST   /app/<customer>/<client_slug>/shipments/<id>/files      attach a document (multipart "file" + "doc_type")
     GET    /app/<customer>/<client_slug>/shipments/<id>/files/<fid>   download it
@@ -12,29 +13,40 @@ calls make_blueprint("<customer>") to get it.
 Create does not touch the browser: it queues one job per shipment (helpers/jobs.py) and the
 worker (helpers/tms_worker.py) does the rest; the page polls /data for progress.
 """
-from flask import Blueprint, abort, g, jsonify, render_template, request, send_file
+from pathlib import Path
+
+from flask import Blueprint, abort, current_app, g, jsonify, render_template, request, send_file
 
 from database.db import SessionLocal
 from database.models import Client, Shipment, TmsCredential
-from database.seed import slugify
+from database import source_sync
 from helpers import jobs, shipment_files, tms_worker
+from helpers.audit import audit
+from helpers.convert import json_number as _n, iso as _d, slugify
 from helpers.decorators import client_access_required
 
-
-def _d(value):
-    return value.isoformat() if value else None
+VIEWS = Path(__file__).resolve().parent.parent / "views"      # the one page every customer shares
 
 
-def _n(value):
-    """A Decimal column as a plain number for JSON (10.000 -> 10, 1600.5 -> 1600.5)."""
-    if value is None:
-        return None
-    f = float(value)
-    return int(f) if f == int(f) else f
+# What the page shows per container, because the source may give each container of a BL its own: a container's own
+# value, else the shipment's (and `own` lists the ones that are really its own)
+PER_CONTAINER_VIEW = ("client_ref", "carrier", "vessel_name", "depot_out_from", "vgm_closing_date", "depot_out_reference",
+                      "depot_out_date", "depot_in_date", "remarks")
+
+
+def _container_values(c, s) -> dict:
+    out = {}
+    for k in PER_CONTAINER_VIEW:
+        v = getattr(c, k)
+        v = v if v is not None else getattr(s, k)
+        out[k] = v.isoformat() if hasattr(v, "isoformat") else v
+    out["ata_date"] = out["depot_out_from"]
+    out["own"] = [k for k in PER_CONTAINER_VIEW if getattr(c, k) is not None]
+    return out
 
 
 def make_blueprint(flow_slug: str) -> Blueprint:
-    bp = Blueprint(flow_slug, __name__, template_folder="templates", url_prefix=f"/app/{flow_slug}")
+    bp = Blueprint(flow_slug, __name__, template_folder=str(VIEWS), url_prefix=f"/app/{flow_slug}")
 
     def client_or_404(session, client_slug: str) -> Client:
         """An active client whose customer name belongs to this flow; anything else is not."""
@@ -132,10 +144,36 @@ def make_blueprint(flow_slug: str) -> Blueprint:
                         "depot_out_own": bool(c.depot_out_address),
                         "depot_in": c.depot_in_address or s.depot_in_address,
                         "depot_in_own": bool(c.depot_in_address),
+                        "depot_in_reference": c.depot_in_reference or s.depot_in_reference,
+                        "depot_in_reference_own": bool(c.depot_in_reference),
                         "tms_order_no": c.tms_order_no,
+                        **_container_values(c, s),
                     } for c in s.containers],
                 } for s in shipments],
             })
+        finally:
+            session.close()
+
+    @bp.route("/<client_slug>/sync", methods=["POST"])
+    @client_access_required()
+    def sync(client_slug):
+        """Load THIS client's shipments from the source (the same load as Admin's, limited to one client)."""
+        session = SessionLocal()
+        try:
+            client = client_or_404(session, client_slug)
+            try:
+                result = source_sync.sync(session, client=client)
+            except source_sync.SourceBusy as e:
+                return jsonify({"error": str(e)}), 409
+            except source_sync.SourceError as e:
+                # the full reason (it can name hosts / tables) is for the log and Admin, not for every user
+                current_app.logger.warning("Sync of %s failed: %s", client.name, e)
+                return jsonify({"error": "The source database could not be read — tell an administrator."}), 502
+            audit(session, g.user["user_id"], "source_sync", client.name,
+                  f'{result["fetched"]} rows; shipments {result["shipments"]}; containers {result["containers"]}')
+            session.commit()
+            return jsonify({k: result[k] for k in ("fetched", "shipments", "containers", "locked", "warnings",
+                                                   "skipped", "missing_containers")})
         finally:
             session.close()
 
