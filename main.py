@@ -69,6 +69,8 @@ def create_app() -> Flask:
     register_all(app)
     if not _running_in_reloader_watcher():
         start_workers()   # TMS_WORKERS browsers (0 = none); see helpers/tms_worker.py
+        from database.source_sync import start_scheduler
+        start_scheduler()  # only if SYNC_INTERVAL_MINUTES > 0
 
     @app.after_request
     def no_store(resp):

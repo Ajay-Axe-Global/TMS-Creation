@@ -6,9 +6,9 @@ and commits its own writes. routes/admin_routes.py only translates HTTP <-> this
 from sqlalchemy import func
 
 from database.models import (
-    AuditLog, Client, DepotAddress, TmsCredential, User, UserClientAccess,
+    AuditLog, Client, DepotAddress, SourceLookup, TmsCredential, User, UserClientAccess,
 )
-from database.seed import slugify
+from helpers.convert import slugify
 from helpers import addresses as address_svc
 from helpers import audit as audit_svc
 from helpers.crypto_utils import encrypt_secret
@@ -46,6 +46,14 @@ def _fmt(dt):
 
 
 # ── Clients (one customer at one warehouse) ───────────────────────────────────
+
+def list_lookups(session):
+    """Customer and warehouse names as the source spells them — suggestions for the Add client form."""
+    out = {"clients": [], "warehouses": []}
+    for r in session.query(SourceLookup).order_by(func.lower(SourceLookup.name)).all():
+        out["clients" if r.kind == "client" else "warehouses"].append(r.name)
+    return out
+
 
 def display_name(client_name: str, warehouse: str) -> str:
     return f"{client_name} - {warehouse}" if warehouse else client_name
@@ -120,44 +128,38 @@ def update_client(session, actor_id, client_id, data):
     return client_dict(c)
 
 
-# ── Depot addresses (per client: source depot name -> TMS address no.) ────────
+# ── Depot addresses (one list for all clients: source depot name -> TMS address no.) ────────
 
 def address_dict(a: DepotAddress) -> dict:
-    return {"id": a.id, "client_id": a.client_id, "client_name": a.client.name,
-            "name": a.name, "tms_address_no": a.tms_address_no}
+    return {"id": a.id, "name": a.name, "tms_address_no": a.tms_address_no}
 
 
-def list_addresses(session, client_id=None):
-    q = session.query(DepotAddress).join(Client).order_by(Client.client_name, Client.warehouse,
-                                                          func.lower(DepotAddress.name))
-    if client_id:
-        q = q.filter(DepotAddress.client_id == client_id)
-    return {"addresses": [address_dict(a) for a in q],
-            "unmapped": address_svc.unmapped(session, client_id)}
+def list_addresses(session):
+    q = session.query(DepotAddress).order_by(func.lower(DepotAddress.name))
+    return {"addresses": [address_dict(a) for a in q], "unmapped": address_svc.unmapped(session)}
 
 
-def _address_fields(session, client_id, data, exclude_id=None):
-    client = session.get(Client, client_id)
-    if not client:
-        raise ServiceError("Choose a client", 400)
+def _address_fields(session, data, exclude_id=None):
     name = _need(data.get("name"), "Depot name")
     no = _need(data.get("tms_address_no"), "TMS address no.")
     if len(no) > 60 or " " in no:
         raise ServiceError("TMS address no. must be one word, e.g. 15609")
     key = address_svc.address_key(name)
-    q = session.query(DepotAddress).filter_by(client_id=client.id, name_key=key)
+    if not key:
+        raise ServiceError("Depot name must contain letters or digits")
+    q = session.query(DepotAddress).filter_by(name_key=key)
     if exclude_id:
         q = q.filter(DepotAddress.id != exclude_id)
     if q.first():
-        raise ServiceError(f'"{name}" is already mapped for {client.name} (names match ignoring case and spacing)', 409)
-    return client, name, no, key
+        raise ServiceError(f'"{name}" is already in the list (names match ignoring case, spacing and punctuation)', 409)
+    return name, no, key
 
 
 def create_address(session, actor_id, data):
-    client, name, no, key = _address_fields(session, data.get("client_id"), data)
-    a = DepotAddress(client_id=client.id, name=name, name_key=key, tms_address_no=no)
+    name, no, key = _address_fields(session, data)
+    a = DepotAddress(name=name, name_key=key, tms_address_no=no)
     session.add(a)
-    audit_svc.audit(session, actor_id, "address.create", f"{client.name} / {name}", f"-> {no}")
+    audit_svc.audit(session, actor_id, "address.create", name, f"-> {no}")
     session.commit()
     return address_dict(a)
 
@@ -166,10 +168,8 @@ def update_address(session, actor_id, address_id, data):
     a = session.get(DepotAddress, address_id)
     if not a:
         raise ServiceError("Address not found", 404)
-    # The client is fixed once created (delete and re-add to move a mapping to another client).
-    client, name, no, key = _address_fields(session, a.client_id, data, exclude_id=a.id)
-    audit_svc.audit(session, actor_id, "address.update", f"{client.name} / {a.name}",
-                    f"{a.name!r}->{a.tms_address_no} => {name!r}->{no}")
+    name, no, key = _address_fields(session, data, exclude_id=a.id)
+    audit_svc.audit(session, actor_id, "address.update", a.name, f"{a.name!r}->{a.tms_address_no} => {name!r}->{no}")
     a.name, a.name_key, a.tms_address_no = name, key, no
     session.commit()
     return address_dict(a)
@@ -179,7 +179,7 @@ def delete_address(session, actor_id, address_id):
     a = session.get(DepotAddress, address_id)
     if not a:
         raise ServiceError("Address not found", 404)
-    audit_svc.audit(session, actor_id, "address.delete", f"{a.client.name} / {a.name}", f"was -> {a.tms_address_no}")
+    audit_svc.audit(session, actor_id, "address.delete", a.name, f"was -> {a.tms_address_no}")
     session.delete(a)
     session.commit()
     return {"deleted": address_id}

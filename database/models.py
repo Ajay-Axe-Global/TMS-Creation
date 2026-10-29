@@ -9,7 +9,7 @@ Layout
   User ──1 TmsCredential ──1 BrowserSession
   Client ──< Shipment ──< ShipmentContainer     one shipment per ITOS number
   Shipment ──1 ShipmentFile                     the one document dropped on its row (the TMS attachment)
-  Client ──< DepotAddress                       depot name (as in the source) -> TMS address no., per client
+  DepotAddress                                  depot name (as in the source) -> TMS address no., one list for all
   Shipment ──< TmsJob ──< JobLog / JobArtifact
 """
 import datetime
@@ -51,6 +51,18 @@ class Client(Base):
     created_at = Column(DateTime, default=utcnow, nullable=False)
 
     grants = relationship("UserClientAccess", back_populates="client")
+
+
+class SourceLookup(Base):
+    """The customer names and warehouse names exactly as the source database spells them. They feed the suggestions
+    in Admin > Clients > Add client, so a client is created with a name + warehouse the sync can find in the source
+    (database/lookups.py holds the starting lists)."""
+    __tablename__ = "source_lookups"
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_lookup_kind_name"),)
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String(20), nullable=False)               # "client" | "warehouse"
+    name = Column(String(255), nullable=False)
 
 
 class User(Base):
@@ -123,24 +135,19 @@ class BrowserSession(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DepotAddress(Base):
-    """Maps a depot name as written in the source ("DR DEPORT", "VMR - 1147") to the
-    TMS address no. typed into the Lines tab (15609, 765) — per CLIENT, so each client
-    has its own list and the same depot name may map to a different no. for another
-    client. Used for both depot-in and depot-out. Shipments keep the NAME as text and it
-    is matched on (client, name_key) (helpers/addresses.py) when shown and when a job is
-    triggered, so adding or fixing a mapping later never leaves a stale link behind."""
+    """Maps a depot name as written in the source ("DR DEPORT", "ACC1 234") to the TMS address no. typed into the Lines
+    tab (15609, 70289). ONE list for every client — they all use the same TMS — for both depot in and depot out.
+    Shipments keep the NAME as text and it is matched on name_key (helpers/addresses.py) when shown and when a job
+    is triggered, so adding or fixing a mapping later never leaves a stale link behind."""
     __tablename__ = "depot_addresses"
-    __table_args__ = (UniqueConstraint("client_id", "name_key", name="uq_depot_client_key"),)
+    __table_args__ = (UniqueConstraint("name_key", name="uq_depot_key"),)
 
     id = Column(Integer, primary_key=True)
-    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
     name = Column(String(255), nullable=False)
     name_key = Column(String(255), nullable=False)    # normalised name, see helpers/addresses.py
     tms_address_no = Column(String(60), nullable=False)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
-
-    client = relationship("Client")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -148,21 +155,22 @@ class DepotAddress(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Shipment(Base):
-    """One ITOS number of one client. The source has one row per container, so a sync
-    groups rows by (client, ITOS no.): the shipment-level fields come from those rows
-    and each row becomes a ShipmentContainer. A re-sync must NEVER touch the tms_*
-    result columns. Customer no. / trade lane are NOT here — they come from the Client.
+    """One BL number of one client. The source has one row per container, so a sync
+    groups rows by (client, BL no.): all containers on the same BL are ONE shipment, the
+    shipment-level fields come from those rows and each row becomes a ShipmentContainer
+    (database/source_sync.py). A re-sync must NEVER touch the tms_* result columns.
+    Customer no. / trade lane are NOT here — they come from the Client.
     The shipment, not the container, is what a user triggers (one job per shipment)."""
     __tablename__ = "shipments"
-    __table_args__ = (UniqueConstraint("client_id", "itos_no", name="uq_shipment_client_itos"),)
+    __table_args__ = (UniqueConstraint("client_id", "bl_number", name="uq_shipment_client_bl"),)
 
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    itos_no = Column(String(120), nullable=False)
+    itos_no = Column(String(120), nullable=True)        # from the source's first row; not unique
     synced_at = Column(DateTime, nullable=True)
 
     client_ref = Column(String(120), nullable=True)
-    bl_number = Column(String(120), nullable=True)
+    bl_number = Column(String(120), nullable=False)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
     country_of_origin = Column(String(10), nullable=True)
@@ -178,6 +186,8 @@ class Shipment(Base):
     depot_out_address = Column(String(255), nullable=True)
     depot_out_reference = Column(String(120), nullable=True)
     depot_out_date = Column(Date, nullable=True)
+    # "UITHALEN VOOR 04/11 – LEEG BINNEN 08/11": built by the source sync from the VGM closing date and the closing date
+    remarks = Column(String(255), nullable=True)
 
     # TMS result — written by the job runner, never by a source sync
     # "not_started" | "queued" | "running" | "done" | "failed" | "needs_relogin"
@@ -194,7 +204,8 @@ class Shipment(Base):
     client = relationship("Client")
     containers = relationship("ShipmentContainer", back_populates="shipment",
                               cascade="all, delete-orphan", order_by="ShipmentContainer.id")
-    file = relationship("ShipmentFile", back_populates="shipment", uselist=False, cascade="all, delete-orphan")
+    files = relationship("ShipmentFile", back_populates="shipment", cascade="all, delete-orphan",
+                         order_by="ShipmentFile.id")
     jobs = relationship("TmsJob", back_populates="shipment")
 
 
@@ -212,6 +223,29 @@ class ShipmentContainer(Base):
     goods = Column(String(120), nullable=True)
     qty = Column(Numeric(14, 3), nullable=True)
     gross_weight = Column(Numeric(14, 3), nullable=True)
+    # This container's own Depot Out address when it differs from the shipment's (usually the only thing
+    # that does): the order is created with the shipment's depot out and this container's order is then
+    # corrected in its Lines. Empty = same as the shipment.
+    depot_out_address = Column(String(255), nullable=True)
+    # Same for Depot In (the source gives each container its own): empty = same as the shipment's.
+    depot_in_address = Column(String(255), nullable=True)
+    # Same for the Depot In reference ("In Ref"): the source gives each container its own; empty = the shipment's.
+    depot_in_reference = Column(String(120), nullable=True)
+    # Everything else the source may give a container differently from the other containers of its BL (another vessel,
+    # ATA, client ref ...). The shipment keeps the first container's value; a container whose value differs keeps its
+    # own here, empty = the shipment's. The TMS order of that container is corrected to it.
+    client_ref = Column(String(120), nullable=True)
+    carrier = Column(String(60), nullable=True)
+    vessel_name = Column(String(120), nullable=True)
+    country_of_origin = Column(String(10), nullable=True)
+    country_of_destination = Column(String(10), nullable=True)
+    closing_date = Column(Date, nullable=True)
+    depot_out_from = Column(Date, nullable=True)          # the ATA
+    vgm_closing_date = Column(Date, nullable=True)
+    depot_out_date = Column(Date, nullable=True)          # Out Booked
+    depot_in_date = Column(Date, nullable=True)           # In Booked
+    depot_out_reference = Column(String(120), nullable=True)
+    remarks = Column(String(255), nullable=True)
 
     # TMS result: this container's own order number
     tms_order_no = Column(String(60), nullable=True)
@@ -221,20 +255,22 @@ class ShipmentContainer(Base):
 
 
 class ShipmentFile(Base):
-    """The one document a user drops on a shipment's row — what the flow attaches to the TMS
-    order (the arrival notice). One per shipment: a new drop replaces the old one. The file
-    lives under uploads/ (stored_path is relative to it); the job snapshots its absolute path."""
+    """A document attached to a shipment, classified by the user as one TMS document type (ANDER, CUSTOMS,
+    DN ...): the flow drops it on that type's zone of the order's Document Types add-in. A type can hold
+    several files. The file lives under uploads/ (stored_path is relative to it); the job snapshots its
+    absolute path."""
     __tablename__ = "shipment_files"
 
     id = Column(Integer, primary_key=True)
-    shipment_id = Column(Integer, ForeignKey("shipments.id"), unique=True, nullable=False)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False)
+    doc_type = Column(String(20), nullable=False, default="ANDER")
     original_name = Column(String(255), nullable=False)
     stored_path = Column(String(500), nullable=False)
     size = Column(Integer, nullable=False)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     uploaded_at = Column(DateTime, default=utcnow, nullable=False)
 
-    shipment = relationship("Shipment", back_populates="file")
+    shipment = relationship("Shipment", back_populates="files")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

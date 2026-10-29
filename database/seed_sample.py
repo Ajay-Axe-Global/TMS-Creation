@@ -6,9 +6,10 @@ skipped) and easy to take back out.
     python -m database.seed_sample emvia_1147      # into a specific client (slug)
     python -m database.seed_sample --remove        # delete the sample shipments again
 
-Creates two shipments that show both shapes:
+Creates three shipments:
   ITOS-SAMPLE-001  one container
   ITOS-SAMPLE-002  two containers (each with its own cargo)
+  ITOS-SAMPLE-003  three identical containers (valid ISO 6346 numbers)
 plus the two depot mappings from the examples (DR DEPORT -> 15609, VMR - 1147 -> 765) for that client.
 Sample shipments are recognisable by the ITOS-SAMPLE- prefix; --remove deletes only those
 (the depot mappings are ordinary mappings and are left alone — delete them in Admin >
@@ -50,6 +51,21 @@ SHIPMENTS = [
                  goods="G0018", qty=Decimal("12"), gross_weight=Decimal("1600")),
             dict(container_no="MSKU9078123", container_type="20GP", seal_no="SEAL0003",
                  goods="G0021", qty=Decimal("8"), gross_weight=Decimal("1100.5")),
+        ],
+    ),
+    dict(
+        itos_no=PREFIX + "003", client_ref="CREF-003", bl_number="MEDUF7821456", carrier="MSC",
+        vessel_name="MSC AURORA", country_of_origin="SA", country_of_destination="BE",
+        depot_out_from=D(2026, 11, 9), vgm_closing_date=D(2026, 11, 11), closing_date=D(2026, 11, 16),
+        depot_out_address="VMR - 1147", depot_out_reference="SEE CPU", depot_out_date=D(2026, 11, 10),
+        depot_in_address="DR DEPORT", depot_in_reference="MSC STOCK", depot_in_date=D(2026, 11, 12),
+        containers=[
+            dict(container_no="CMAU1234564", container_type="40HC", seal_no="SEAL0004",
+                 goods="G0018", qty=Decimal("14"), gross_weight=Decimal("1750")),
+            dict(container_no="HLXU4567890", container_type="40HC", seal_no="SEAL0005",
+                 goods="G0018", qty=Decimal("14"), gross_weight=Decimal("1750")),
+            dict(container_no="OOLU2345673", container_type="40HC", seal_no="SEAL0006",
+                 goods="G0018", qty=Decimal("14"), gross_weight=Decimal("1750")),
         ],
     ),
 ]

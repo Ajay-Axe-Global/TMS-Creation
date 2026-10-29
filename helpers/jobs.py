@@ -16,15 +16,14 @@ The job keeps a snapshot (payload), so later edits to the shipment, the client o
 address list never change a job that is queued or being retried.
 """
 import datetime
-import importlib
 import uuid
 
 from sqlalchemy import text
 
 from database.models import Client, JobLog, Shipment, TmsCredential, TmsJob
-from database.seed import slugify
 from helpers import addresses as address_svc
-from helpers import shipment_files
+from helpers import flows, shipment_files
+from helpers.convert import iso as _iso, plain_number as _num
 
 # A shipment can be (re)queued from these states; anything else is already in flight or done.
 QUEUEABLE = {"not_started", "failed", "needs_relogin", "dry_run"}
@@ -36,42 +35,39 @@ class JobError(Exception):
     """The whole request is refused (nothing is queued)."""
 
 
-def _iso(d):
-    return d.isoformat() if d else None
-
-
-def _txt(v):
-    return None if v is None else str(v)
-
-
-def _num(v):
-    """A stored decimal as the plain number a person would type into TMS: 10.000 -> "10",
-    1500.500 -> "1500.5" (never "1.5E+3" and never trailing zeros)."""
-    return None if v is None else format(v.normalize(), "f")
-
-
-def _depot(session, client, name, reference, date, problems, label):
+def _depot(session, name, reference, date, problems, label):
     """One depot line of the payload; records a problem if its TMS address no. is unknown."""
     name = (name or "").strip()
     if not name:
         return None
-    mapping = address_svc.resolve(session, client.id, name)
-    if mapping is None:
-        problems.append(f'{label} depot "{name}" has no TMS address no. for {client.name} — '
+    address_no = address_svc.address_no(session, name)
+    if address_no is None:
+        problems.append(f'{label} depot "{name}" has no TMS address no. — '
                         "ask an administrator to add it in Admin → Addresses")
-    return {"name": name, "address_no": mapping.tms_address_no if mapping else None,
+    return {"name": name, "address_no": address_no,
             "reference": reference, "date": _iso(date)}
 
 
-def _flow_problems(client: Client, payload: dict) -> list[str]:
-    """Ask the customer's flow (clients/<customer>/tms_create.py) whether it can handle this shipment, so
-    one it cannot is refused here instead of being half-created in TMS."""
-    try:
-        module = importlib.import_module(f"clients.{slugify(client.client_name)}.tms_create")
-    except ImportError:
-        return []
-    check = getattr(module, "check_payload", None)
-    return list(check(payload)) if check else []
+# General values a container may carry on its own when they differ from the shipment's (the same names as the columns)
+OWN_VALUES = ("client_ref", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
+              "depot_out_from", "vgm_closing_date", "remarks")
+
+
+def _own_values(c) -> dict:
+    """This container's own General values (dates as ISO text); a value that is the shipment's is None."""
+    return {k: (_iso(v) if hasattr(v, "isoformat") else v) for k in OWN_VALUES for v in [getattr(c, k)]}
+
+
+def _own_depot(session, shipment, c, which, problems):
+    """This container's own Depot Out / In — its address, reference or booked date differs from the shipment's — with
+    whatever it does not have of its own taken from the shipment's; None when it has nothing of its own."""
+    address, reference, date = (getattr(c, f"depot_{which}_{k}") for k in ("address", "reference", "date"))
+    if not (address or reference or date):
+        return None
+    return _depot(session, address or getattr(shipment, f"depot_{which}_address"),
+                  reference or getattr(shipment, f"depot_{which}_reference"),
+                  date or getattr(shipment, f"depot_{which}_date"), problems,
+                  f"Depot {which} of container {c.container_no}")
 
 
 def build_payload(session, client: Client, shipment: Shipment):
@@ -89,25 +85,32 @@ def build_payload(session, client: Client, shipment: Shipment):
             "country_of_origin": shipment.country_of_origin,
             "country_of_destination": shipment.country_of_destination,
             "depot_out_from": _iso(shipment.depot_out_from), "vgm_closing_date": _iso(shipment.vgm_closing_date),
-            "closing_date": _iso(shipment.closing_date),
-            "depot_in": _depot(session, client, shipment.depot_in_address, shipment.depot_in_reference,
+            "closing_date": _iso(shipment.closing_date), "remarks": shipment.remarks,
+            "depot_in": _depot(session, shipment.depot_in_address, shipment.depot_in_reference,
                                shipment.depot_in_date, problems, "Depot in"),
-            "depot_out": _depot(session, client, shipment.depot_out_address, shipment.depot_out_reference,
+            "depot_out": _depot(session, shipment.depot_out_address, shipment.depot_out_reference,
                                 shipment.depot_out_date, problems, "Depot out"),
         },
         "containers": [{"id": c.id, "container_no": c.container_no, "container_type": c.container_type,
                         "seal_no": c.seal_no, "goods": c.goods, "qty": _num(c.qty),
-                        "gross_weight": _num(c.gross_weight)} for c in shipment.containers],
-        "file": None,
+                        "gross_weight": _num(c.gross_weight),
+                        **_own_values(c),
+                        # only when this container's Depot Out / In differs from the shipment's
+                        "depot_out": _own_depot(session, shipment, c, "out", problems),
+                        "depot_in": _own_depot(session, shipment, c, "in", problems),
+                        } for c in shipment.containers],
+        "files": [],
     }
-    # The document dropped on the row: its absolute path is what the flow attaches in TMS.
-    if shipment.file is not None:
-        if shipment_files.exists(shipment.file):
-            payload["file"] = {"path": str(shipment_files.absolute_path(shipment.file)),
-                               "name": shipment.file.original_name, "size": shipment.file.size}
+    # The documents attached to the shipment, each with the type the user put it under: the absolute path is what
+    # the flow drops on that type's zone in TMS.
+    for f in shipment.files:
+        if shipment_files.exists(f):
+            payload["files"].append({"path": str(shipment_files.absolute_path(f)), "name": f.original_name,
+                                     "size": f.size, "doc_type": f.doc_type})
         else:
-            problems.append("its attached file is missing on the server — upload it again")
-    problems.extend(_flow_problems(client, payload))
+            problems.append(f'its {f.doc_type} file "{f.original_name}" is missing on the server — upload it again')
+    # the customer's map may refuse what it cannot send; better here than half-created in TMS
+    problems.extend(flows.problems(client.client_name, payload))
     return payload, problems
 
 
@@ -253,6 +256,7 @@ def recover_interrupted(session) -> int:
     for job in session.query(TmsJob).filter_by(status="running").all():
         n += 1
         if job.stage == "start":
+            job.attempts = max(0, job.attempts - 1)          # being cut off is not the job's fault
             job.status = "queued"
             job.shipment.tms_status = "queued"
             job.shipment.tms_error = None

@@ -22,7 +22,7 @@
   // ═══════════════════════════════════════════════════════════════════
   // Tabs
   // ═══════════════════════════════════════════════════════════════════
-  const loaders = { users: loadUsersTab, clients: loadClientsTab, addresses: loadAddressesTab, audit: loadAuditTab };
+  const loaders = { dashboard: loadDashboardTab, users: loadUsersTab, clients: loadClientsTab, addresses: loadAddressesTab, audit: loadAuditTab };
 
   document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -292,7 +292,41 @@
     }));
   }
 
+  // Shipment source sync (database/source_sync.py)
+  function renderSync(r) {
+    const s = r.shipments, c = r.containers;
+    showMsg($("sync-msg"), `${r.dry_run ? "Preview — nothing written. " : ""}${r.fetched} source rows → shipments: ` +
+      `${s.created} new, ${s.updated} updated, ${s.unchanged} unchanged, ${s.locked} locked; ` +
+      `containers: ${c.created} new, ${c.updated} updated.`, true);
+    const list = (title, items, fmt) => items.length
+      ? `<strong>${title} (${items.length})</strong><ul>${items.map(i => `<li>${esc(fmt(i))}</li>`).join("")}</ul>` : "";
+    $("sync-detail").innerHTML =
+      list("Rows read per client (0 = the name / warehouse is spelled differently in the source)", r.per_client,
+        i => `${i.client}: ${i.rows}`) +
+      list("Rows skipped", r.skipped, i => `${i.bl_number || "row " + i.row} — ${i.reason}`) +
+      list("Locked, not edited", r.locked, i => `${i.bl_number} (${i.client}) — ${i.reason}`) +
+      list("Warnings", r.warnings, i => i) +
+      list("No longer in the source (kept)", r.missing_containers, i => `${i.bl_number}: ${i.container_no}`);
+  }
+
+  async function runSync(dry) {
+    const btns = [$("sync-preview-btn"), $("sync-run-btn")];
+    btns.forEach(b => b.disabled = true);
+    showMsg($("sync-msg"), "Reading the source database…", true);
+    $("sync-detail").innerHTML = "";
+    try { renderSync(await api(`/api/admin/sync${dry ? "?dry_run=1" : ""}`, { method: "POST" })); }
+    catch (e) { showMsg($("sync-msg"), e.message, false); }
+    finally { btns.forEach(b => b.disabled = false); }
+  }
+  $("sync-preview-btn").addEventListener("click", () => runSync(true));
+  $("sync-run-btn").addEventListener("click", () => runSync(false));
+
   async function loadClientsTab() {
+    api("/api/admin/lookups").then(l => {          // suggestions for the client name / warehouse inputs
+      const opts = a => a.map(n => `<option value="${esc(n)}"></option>`).join("");
+      $("lookup-clients").innerHTML = opts(l.clients);
+      $("lookup-warehouses").innerHTML = opts(l.warehouses);
+    }).catch(() => {});
     await loadCatalog();
     fillClientSelects();
     updateUserStatCards();
@@ -300,7 +334,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // Addresses tab (per client)
+  // Addresses tab (one list for all clients)
   // ═══════════════════════════════════════════════════════════════════
   let addressesCache = [];
   let editingAddressId = null;
@@ -310,7 +344,6 @@
     $("address-form-title").textContent = "Add depot address";
     $("add-address-btn").textContent = "Add address";
     $("cancel-address-btn").style.display = "none";
-    $("address-client").disabled = false;
     $("address-name").value = $("address-no").value = "";
   }
   $("cancel-address-btn").addEventListener("click", resetAddressForm);
@@ -322,8 +355,6 @@
     $("address-form-title").textContent = `Edit depot: ${a.name}`;
     $("add-address-btn").textContent = "Update address";
     $("cancel-address-btn").style.display = "block";
-    $("address-client").value = a.client_id;
-    $("address-client").disabled = true;            // a mapping belongs to its client; delete + re-add to move it
     $("address-name").value = a.name;
     $("address-no").value = a.tms_address_no;
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -335,42 +366,25 @@
     try {
       const data = await api(isEdit ? `/api/admin/addresses/${editingAddressId}` : "/api/admin/addresses",
         { method: isEdit ? "PUT" : "POST",
-          body: { client_id: parseInt($("address-client").value, 10) || null,
-                  name: $("address-name").value.trim(), tms_address_no: $("address-no").value.trim() } });
-      showMsg(msg, isEdit ? `Updated "${data.name}".` : `Added "${data.name}" → ${data.tms_address_no} for ${data.client_name}.`, true);
-      const keepClient = $("address-client").value;
+          body: { name: $("address-name").value.trim(), tms_address_no: $("address-no").value.trim() } });
+      showMsg(msg, isEdit ? `Updated "${data.name}".` : `Added "${data.name}" → ${data.tms_address_no}.`, true);
       resetAddressForm();
-      $("address-client").value = keepClient;       // adding several depots for one client in a row
       await loadAddressesTab();
     } catch (e) { showMsg(msg, e.message, false); }
   });
 
-  $("addresses-filter-client").addEventListener("change", () => loadAddressesTab());
-
   async function loadAddressesTab() {
-    if (!clientsCache.length) clientsCache = await api("/api/admin/clients");
-    // Keep the chosen values across reloads.
-    const formClient = $("address-client").value;
-    const filterClient = $("addresses-filter-client").value;
-    $("address-client").innerHTML = clientsCache.filter(c => c.is_active)
-      .map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-    $("addresses-filter-client").innerHTML = `<option value="">All clients</option>` +
-      clientsCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-    if (formClient) $("address-client").value = formClient;
-    $("addresses-filter-client").value = filterClient;
-
-    const data = await api("/api/admin/addresses" + (filterClient ? `?client_id=${filterClient}` : ""));
+    const data = await api("/api/admin/addresses");
     addressesCache = data.addresses;
     $("addr-stat-mapped").textContent = data.addresses.length.toLocaleString();
     $("addr-stat-unmapped").textContent = data.unmapped.length.toLocaleString();
 
     $("unmapped-panel").style.display = data.unmapped.length ? "block" : "none";
     $("unmapped-list").innerHTML = data.unmapped.map((u, i) =>
-      `<span class="chip" style="cursor:pointer" data-unmapped="${i}">${esc(u.client_name)} · ${esc(u.name)}</span>`).join("");
+      `<span class="chip" style="cursor:pointer" data-unmapped="${i}">${esc(u.name)}</span>`).join("");
     document.querySelectorAll("[data-unmapped]").forEach(chip => chip.addEventListener("click", () => {
       const u = data.unmapped[+chip.dataset.unmapped];
       resetAddressForm();
-      $("address-client").value = u.client_id;
       $("address-name").value = u.name;
       $("address-no").focus();
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -379,7 +393,6 @@
     document.querySelector("#addresses-table tbody").innerHTML = data.addresses.length
       ? data.addresses.map(a => `
         <tr>
-          <td>${esc(a.client_name)}</td>
           <td>${esc(a.name)}</td>
           <td class="mono">${esc(a.tms_address_no)}</td>
           <td><div class="row-actions">
@@ -387,17 +400,271 @@
             <button class="danger" data-delete-address="${a.id}">Delete</button>
           </div></td>
         </tr>`).join("")
-      : emptyRow(4, "No depot addresses yet.");
+      : emptyRow(3, "No depot addresses yet.");
 
     document.querySelectorAll("[data-edit-address]").forEach(b =>
       b.addEventListener("click", () => startEditAddress(+b.dataset.editAddress)));
     document.querySelectorAll("[data-delete-address]").forEach(b => b.addEventListener("click", async () => {
       const a = addressesCache.find(x => x.id === +b.dataset.deleteAddress);
-      if (!confirm(`Delete "${a.name}" → ${a.tms_address_no} for ${a.client_name}? Its shipments using this depot will show as not mapped.`)) return;
+      if (!confirm(`Delete "${a.name}" → ${a.tms_address_no}? Shipments using this depot will show as not mapped.`)) return;
       try { await api(`/api/admin/addresses/${a.id}`, { method: "DELETE" }); await loadAddressesTab(); }
       catch (e) { alert(e.message); }
     }));
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Dashboard tab — who created which TMS orders, for which client (same layout as the Vanmoer dashboard).
+  // An "order" is a TMS order number (one per container); see admin/dashboard.py.
+  // ═══════════════════════════════════════════════════════════════════
+  const VIEWER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const CHART_COLOR = "#4f7cff";
+  const PALETTE = ["#4f7cff", "#f59e0b", "#34d399", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#c084fc", "#facc15", "#38bdf8"];
+  // Same client = same colour in the bar and the pie (position in the client list, which is stable).
+  const clientColor = id => PALETTE[Math.max(0, clientsCache.findIndex(c => c.id === id)) % PALETTE.length];
+  const truncate = (s, n = 40) => !s ? "—" : (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const debounce = (fn, wait) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), wait); }; };
+  const mono = "JetBrains Mono, monospace";
+
+  function rectPath(x, y, w, h, topRadius, fill) {
+    const r = Math.min(topRadius, h, w / 2);
+    if (r <= 0) return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" />`;
+    return `<path d="M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z" fill="${fill}" />`;
+  }
+
+  function gridLines(W, padL, padT, plotH, niceMax) {
+    let g = "";
+    for (let i = 0; i <= 4; i++) {
+      const y = padT + plotH - (plotH * i) / 4;
+      g += `<line x1="${padL}" y1="${y}" x2="${W - 10}" y2="${y}" stroke="#2c2c2a" stroke-width="1" />`;
+      g += `<text x="${padL - 8}" y="${y + 3}" text-anchor="end" font-size="10" fill="#6b7280" font-family="${mono}">${Math.round((niceMax * i) / 4)}</text>`;
+    }
+    return g;
+  }
+
+  function drawDayChart(days) {
+    const svg = $("chart-svg"), tooltip = $("chart-tooltip");
+    const W = 1080, H = 220, padL = 30, padB = 26, padT = 22;
+    const plotW = W - padL - 10, plotH = H - padT - padB;
+    const niceMax = Math.ceil(Math.max(1, ...days.map(d => d.count)) / 5) * 5 || 5;
+    const n = days.length, bandW = plotW / n, barW = Math.min(24, bandW * 0.55), baseY = padT + plotH;
+    let bars = "", labels = "", axis = "", hits = "";
+    days.forEach((d, i) => {
+      const cx = padL + bandW * i + bandW / 2;
+      const h = Math.max((d.count / niceMax) * plotH, d.count > 0 ? 1 : 0);
+      if (h > 0) bars += rectPath(cx - barW / 2, baseY - h, barW, h, 4, CHART_COLOR);
+      if (d.count > 0) labels += `<text x="${cx}" y="${Math.max(baseY - h - 6, padT - 8)}" text-anchor="middle" font-size="10" fill="#9299a8" font-family="${mono}">${d.count}</text>`;
+      hits += `<rect class="hit" data-idx="${i}" x="${padL + bandW * i}" y="${padT}" width="${bandW}" height="${plotH}" fill="transparent" style="cursor:pointer" />`;
+      if (i % 2 === 0 || n <= 10) {
+        const label = new Date(d.date + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
+        axis += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="#6b7280" font-family="${mono}">${label}</text>`;
+      }
+    });
+    svg.innerHTML = gridLines(W, padL, padT, plotH, niceMax) + bars + labels + axis + hits;
+    svg.querySelectorAll(".hit").forEach(hit => {
+      const d = days[parseInt(hit.dataset.idx, 10)];
+      hit.addEventListener("mousemove", e => {
+        const r = $("chart-wrap").getBoundingClientRect();
+        tooltip.style.left = `${e.clientX - r.left}px`;
+        tooltip.style.top = `${e.clientY - r.top - 10}px`;
+        tooltip.style.opacity = "1";
+        const label = new Date(d.date + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+        tooltip.innerHTML = `<div class="t-date">${label}</div><div class="t-row"><span class="t-dot" style="background:${CHART_COLOR}"></span>Orders: ${d.count}</div>`;
+      });
+      hit.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
+    });
+  }
+
+  function drawClientBars(svg, data) {
+    const W = 520, H = 220, padL = 34, padB = 30, padT = 22;
+    const plotW = W - padL - 10, plotH = H - padT - padB;
+    const niceMax = Math.ceil(Math.max(1, ...data.map(d => d.count)) / 5) * 5 || 5;
+    const n = Math.max(data.length, 1), bandW = plotW / n, barW = Math.min(48, bandW * 0.5), baseY = padT + plotH;
+    let bars = "", labels = "", axis = "";
+    data.forEach((d, i) => {
+      const cx = padL + bandW * i + bandW / 2;
+      const h = Math.max((d.count / niceMax) * plotH, d.count > 0 ? 1 : 0);
+      if (h > 0) bars += rectPath(cx - barW / 2, baseY - h, barW, h, 4, d.color);
+      if (d.count > 0) labels += `<text x="${cx}" y="${Math.max(baseY - h - 6, padT - 8)}" text-anchor="middle" font-size="10" fill="#9299a8" font-family="${mono}">${d.count}</text>`;
+      axis += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="10" fill="#9299a8" font-family="${mono}">${esc(truncate(d.client_name, 10))}</text>`;
+    });
+    svg.innerHTML = gridLines(W, padL, padT, plotH, niceMax) + bars + labels + axis;
+  }
+
+  function arcPath(cx, cy, r, a0, a1) {
+    const x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0), x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+    return `M${cx},${cy} L${x0},${y0} A${r},${r} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${x1},${y1} Z`;
+  }
+
+  // data: [{ label, value, color }]
+  function drawPie(svg, legend, data) {
+    const rows = data.filter(d => d.value > 0), total = rows.reduce((a, d) => a + d.value, 0);
+    if (total <= 0) { svg.innerHTML = ""; legend.innerHTML = `<div class="pie-empty">No orders in this period.</div>`; return; }
+    if (rows.length === 1) svg.innerHTML = `<circle cx="90" cy="90" r="80" fill="${rows[0].color}" />`;
+    else {
+      let a = -Math.PI / 2;
+      svg.innerHTML = rows.map(d => { const sweep = (d.value / total) * Math.PI * 2; const p = `<path d="${arcPath(90, 90, 80, a, a + sweep)}" fill="${d.color}" />`; a += sweep; return p; }).join("");
+    }
+    legend.innerHTML = rows.map(d => `
+      <div class="pie-legend-row"><span class="pie-legend-swatch" style="background:${d.color}"></span>
+        <span class="pie-legend-name">${esc(d.label)}</span>
+        <span class="pie-legend-value">${d.value.toLocaleString()} · ${Math.round(d.value / total * 100)}%</span></div>`).join("");
+  }
+
+  const periodParams = state => {
+    const p = new URLSearchParams({ period: state.period, tz: VIEWER_TZ });
+    if (state.period === "custom") { if (!state.since || !state.until) return null; p.set("since", state.since); p.set("until", state.until); }
+    return p;
+  };
+
+  function wireDropdownPeriod(selectId, rangeId, sinceId, untilId, applyId, state, onChange) {
+    $(selectId).addEventListener("change", () => {
+      state.period = $(selectId).value;
+      $(rangeId).style.display = state.period === "custom" ? "flex" : "none";
+      if (state.period !== "custom" || (state.since && state.until)) onChange();
+    });
+    $(applyId).addEventListener("click", () => {
+      if (!$(sinceId).value || !$(untilId).value) return;
+      state.since = $(sinceId).value; state.until = $(untilId).value; onChange();
+    });
+  }
+
+  async function loadStats() {
+    const p = new URLSearchParams({ tz: VIEWER_TZ });
+    if ($("chart-filter-client").value) p.set("client_id", $("chart-filter-client").value);
+    const s = await api(`/api/admin/stats?${p}`);
+    $("stat-total").textContent = s.total_orders.toLocaleString();
+    $("stat-rate").textContent = `${s.success_rate}%`;
+    $("stat-today").textContent = s.orders_today.toLocaleString();
+    $("stat-week").textContent = s.orders_this_week.toLocaleString();
+    drawDayChart(s.series);
+  }
+
+  const barState = { period: "today", since: null, until: null };
+  const pieState = { period: "today", since: null, until: null };
+  async function loadClientBars() {
+    const p = periodParams(barState); if (!p) return;
+    const rows = await api(`/api/admin/stats/by-client?${p}`);
+    drawClientBars($("client-bar-svg"), rows.map(r => ({ ...r, color: clientColor(r.client_id) })));
+  }
+  async function loadClientPie() {
+    const p = periodParams(pieState); if (!p) return;
+    const rows = await api(`/api/admin/stats/by-client?${p}`);
+    drawPie($("client-pie-svg"), $("client-pie-legend"), rows.map(r => ({ label: r.client_name, value: r.count, color: clientColor(r.client_id) })));
+  }
+  wireDropdownPeriod("client-bar-period", "client-bar-custom-range", "client-bar-since", "client-bar-until", "client-bar-apply-btn", barState, loadClientBars);
+  wireDropdownPeriod("client-pie-period", "client-pie-custom-range", "client-pie-since", "client-pie-until", "client-pie-apply-btn", pieState, loadClientPie);
+  $("chart-filter-client").addEventListener("change", loadStats);
+
+  // ── user x client summary + drill-down ──
+  const periodState = { period: "today", since: null, until: null };
+  let productivityVisible = false, summaryCache = [];
+
+  function summaryParams() {
+    const p = periodParams(periodState); if (!p) return null;
+    if ($("filter-user").value) p.set("user_id", $("filter-user").value);
+    if ($("filter-client").value) p.set("client_id", $("filter-client").value);
+    const q = $("summary-search").value.trim(); if (q) p.set("search", q);
+    return p;
+  }
+  async function loadSummary() {
+    const p = summaryParams(); if (!p) return;
+    summaryCache = await api(`/api/admin/jobs/summary?${p}`);
+    renderSummary();
+  }
+  async function loadProductivity() {
+    const p = summaryParams(); if (!p) return;
+    const rows = await api(`/api/admin/jobs/productivity?${p}`);
+    drawPie($("productivity-pie-svg"), $("productivity-pie-legend"),
+      rows.map((r, i) => ({ label: `${r.user_name} (${r.username})`, value: r.count, color: PALETTE[i % PALETTE.length] })));
+  }
+  async function refreshSummary() { await loadSummary(); if (productivityVisible) await loadProductivity(); }
+
+  const countPill = (n, failed) => `<span class="count-pill">${n}${failed > 0 ? ` <span class="fail">· ${failed} failed</span>` : ""}</span>`;
+
+  function renderSummary() {
+    const tbody = document.querySelector("#summary-table tbody"), tfoot = document.querySelector("#summary-table tfoot");
+    if (!summaryCache.length) { tbody.innerHTML = emptyRow(5, "No shipments match these filters."); tfoot.innerHTML = ""; return; }
+    tbody.innerHTML = summaryCache.map((r, i) => `
+      <tr class="clickable" data-i="${i}">
+        <td>${esc(r.user_name)} <span class="mono">(${esc(r.username)})</span></td>
+        <td>${esc(r.client_name)}</td>
+        <td class="num">${countPill(r.count, 0)}</td>
+        <td class="num">${countPill(r.jobs, r.failed_count)}</td>
+        <td class="mono">${r.last_run ? esc(fmtTimestamp(r.last_run)) : "—"}</td>
+      </tr>`).join("");
+    tbody.querySelectorAll("tr.clickable").forEach(tr => tr.addEventListener("click", () => openDrillDown(summaryCache[+tr.dataset.i])));
+    const sum = k => summaryCache.reduce((a, r) => a + r[k], 0);
+    tfoot.innerHTML = `<tr class="total-row"><td colspan="2">Total</td><td class="num">${countPill(sum("count"), 0)}</td>
+      <td class="num">${countPill(sum("jobs"), sum("failed_count"))}</td><td></td></tr>`;
+  }
+
+  let modalJobs = [];
+  async function openDrillDown(r) {
+    $("modal-title").textContent = `${r.user_name} — ${r.client_name}`;
+    $("modal-sub").textContent = "Loading…";
+    $("modal-overlay").classList.add("open");
+    document.querySelector("#modal-table tbody").innerHTML = "";
+    const p = periodParams(periodState) || new URLSearchParams();
+    p.set("user_id", r.user_id); p.set("client_id", r.client_id);
+    modalJobs = await api(`/api/admin/jobs?${p}`);
+    $("modal-sub").textContent = `${modalJobs.length} shipment${modalJobs.length === 1 ? "" : "s"} · ${r.count} order${r.count === 1 ? "" : "s"}`;
+    document.querySelector("#modal-table tbody").innerHTML = modalJobs.length ? modalJobs.map(j => `
+      <tr>
+        <td class="mono">${esc(fmtTimestamp(j.timestamp))}</td>
+        <td class="mono">${esc(j.itos_no)}${j.client_ref ? `<div class="panel-sub" style="margin:0">${esc(j.client_ref)}</div>` : ""}</td>
+        <td class="mono">${esc(j.file_no || "—")}</td>
+        <td><div class="ref-cell">${j.orders.map(o => `<span class="ref-chip" title="${esc(o.container_no)}">${esc(o.tms_order_no || "—")} <span class="mono">${esc(o.container_no)}</span></span>`).join("")}</div></td>
+        <td><span class="badge status-${j.status === "done" ? "done" : "failed"}">${esc(j.status.replace("_", " "))}</span></td>
+        <td title="${esc(j.message || "")}">${esc(truncate(j.message, 60))}</td>
+      </tr>`).join("") : emptyRow(6, "No shipments found.");
+  }
+  const closeModal = () => $("modal-overlay").classList.remove("open");
+  $("modal-close").addEventListener("click", closeModal);
+  $("modal-overlay").addEventListener("click", e => { if (e.target.id === "modal-overlay") closeModal(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+  // period buttons (scoped to #period-group so the Productivity toggle is not wired as a period)
+  document.querySelectorAll("#period-group .period-seg").forEach(btn => btn.addEventListener("click", () => {
+    document.querySelectorAll("#period-group .period-seg").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    periodState.period = btn.dataset.period;
+    $("custom-range").style.display = periodState.period === "custom" ? "flex" : "none";
+    if (periodState.period !== "custom" || (periodState.since && periodState.until)) refreshSummary();
+  }));
+  $("custom-apply-btn").addEventListener("click", () => {
+    if (!$("custom-since").value || !$("custom-until").value) return;
+    periodState.since = $("custom-since").value; periodState.until = $("custom-until").value; refreshSummary();
+  });
+  ["filter-user", "filter-client"].forEach(id => $(id).addEventListener("change", refreshSummary));
+  $("summary-search").addEventListener("input", debounce(refreshSummary, 300));
+  $("productivity-toggle").addEventListener("click", () => {
+    productivityVisible = !productivityVisible;
+    $("productivity-toggle").classList.toggle("active", productivityVisible);
+    $("productivity-section").style.display = productivityVisible ? "block" : "none";
+    if (productivityVisible) loadProductivity();
+  });
+
+  function fillDashboardFilters() {
+    const ids = ["chart-filter-client", "filter-client", "filter-user"];
+    const keep = ids.map(id => $(id).value);
+    const clientOpts = clientsCache.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    $("chart-filter-client").innerHTML = `<option value="">All clients</option>` + clientOpts;
+    $("filter-client").innerHTML = `<option value="">All clients</option>` + clientOpts;
+    $("filter-user").innerHTML = `<option value="">All users</option>` +
+      usersCache.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join("");
+    ids.forEach((id, i) => { $(id).value = keep[i]; });
+  }
+
+  async function loadDashboardTab() {
+    await loadCatalog();                         // fresh clients/users: filters and the per-client colours
+    fillDashboardFilters();
+    await Promise.all([loadStats(), loadClientBars(), loadClientPie(), refreshSummary()]);
+  }
+  // keep the numbers fresh while the Dashboard is on screen (jobs finish in the background)
+  setInterval(() => {
+    if (document.hidden || !$("tab-dashboard").classList.contains("active")) return;
+    Promise.all([loadStats(), loadClientBars(), loadClientPie(), refreshSummary()]).catch(() => {});
+  }, 30000);
 
   // ═══════════════════════════════════════════════════════════════════
   // Audit tab
@@ -424,7 +691,7 @@
       const me = await api("/api/auth/me");
       if (me.role !== "admin") { location.href = "/dashboard"; return; }
       resetUserForm();
-      await loadUsersTab();
+      await loadDashboardTab();
     } catch (e) {
       alert(e.message);
     } finally {
