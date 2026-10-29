@@ -6,7 +6,7 @@ and commits its own writes. routes/admin_routes.py only translates HTTP <-> this
 from sqlalchemy import func
 
 from database.models import (
-    AuditLog, Client, DepotAddress, TmsCredential, User, UserClientAccess,
+    AuditLog, Client, DepotAddress, SourceLookup, TmsCredential, User, UserClientAccess,
 )
 from database.seed import slugify
 from helpers import addresses as address_svc
@@ -46,6 +46,14 @@ def _fmt(dt):
 
 
 # ── Clients (one customer at one warehouse) ───────────────────────────────────
+
+def list_lookups(session):
+    """Customer and warehouse names as the source spells them — suggestions for the Add client form."""
+    out = {"clients": [], "warehouses": []}
+    for r in session.query(SourceLookup).order_by(func.lower(SourceLookup.name)).all():
+        out["clients" if r.kind == "client" else "warehouses"].append(r.name)
+    return out
+
 
 def display_name(client_name: str, warehouse: str) -> str:
     return f"{client_name} - {warehouse}" if warehouse else client_name

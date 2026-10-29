@@ -53,6 +53,18 @@ class Client(Base):
     grants = relationship("UserClientAccess", back_populates="client")
 
 
+class SourceLookup(Base):
+    """The customer names and warehouse names exactly as the source database spells them. They feed the suggestions
+    in Admin > Clients > Add client, so a client is created with a name + warehouse the sync can find in the source
+    (database/lookups.py holds the starting lists)."""
+    __tablename__ = "source_lookups"
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_lookup_kind_name"),)
+
+    id = Column(Integer, primary_key=True)
+    kind = Column(String(20), nullable=False)               # "client" | "warehouse"
+    name = Column(String(255), nullable=False)
+
+
 class User(Base):
     """Users are deactivated, never deleted, so job history stays intact."""
     __tablename__ = "users"
@@ -148,21 +160,22 @@ class DepotAddress(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Shipment(Base):
-    """One ITOS number of one client. The source has one row per container, so a sync
-    groups rows by (client, ITOS no.): the shipment-level fields come from those rows
-    and each row becomes a ShipmentContainer. A re-sync must NEVER touch the tms_*
-    result columns. Customer no. / trade lane are NOT here — they come from the Client.
+    """One BL number of one client. The source has one row per container, so a sync
+    groups rows by (client, BL no.): all containers on the same BL are ONE shipment, the
+    shipment-level fields come from those rows and each row becomes a ShipmentContainer
+    (database/source_sync.py). A re-sync must NEVER touch the tms_* result columns.
+    Customer no. / trade lane are NOT here — they come from the Client.
     The shipment, not the container, is what a user triggers (one job per shipment)."""
     __tablename__ = "shipments"
-    __table_args__ = (UniqueConstraint("client_id", "itos_no", name="uq_shipment_client_itos"),)
+    __table_args__ = (UniqueConstraint("client_id", "bl_number", name="uq_shipment_client_bl"),)
 
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    itos_no = Column(String(120), nullable=False)
+    itos_no = Column(String(120), nullable=True)        # from the source's first row; not unique
     synced_at = Column(DateTime, nullable=True)
 
     client_ref = Column(String(120), nullable=True)
-    bl_number = Column(String(120), nullable=True)
+    bl_number = Column(String(120), nullable=False)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
     country_of_origin = Column(String(10), nullable=True)
@@ -178,6 +191,8 @@ class Shipment(Base):
     depot_out_address = Column(String(255), nullable=True)
     depot_out_reference = Column(String(120), nullable=True)
     depot_out_date = Column(Date, nullable=True)
+    # "UITHALEN VOOR 04/11 – LEEG BINNEN 08/11": built by the source sync from the VGM closing date and the closing date
+    remarks = Column(String(255), nullable=True)
 
     # TMS result — written by the job runner, never by a source sync
     # "not_started" | "queued" | "running" | "done" | "failed" | "needs_relogin"
@@ -194,7 +209,8 @@ class Shipment(Base):
     client = relationship("Client")
     containers = relationship("ShipmentContainer", back_populates="shipment",
                               cascade="all, delete-orphan", order_by="ShipmentContainer.id")
-    file = relationship("ShipmentFile", back_populates="shipment", uselist=False, cascade="all, delete-orphan")
+    files = relationship("ShipmentFile", back_populates="shipment", cascade="all, delete-orphan",
+                         order_by="ShipmentFile.id")
     jobs = relationship("TmsJob", back_populates="shipment")
 
 
@@ -212,6 +228,12 @@ class ShipmentContainer(Base):
     goods = Column(String(120), nullable=True)
     qty = Column(Numeric(14, 3), nullable=True)
     gross_weight = Column(Numeric(14, 3), nullable=True)
+    # This container's own Depot Out address when it differs from the shipment's (usually the only thing
+    # that does): the order is created with the shipment's depot out and this container's order is then
+    # corrected in its Lines. Empty = same as the shipment.
+    depot_out_address = Column(String(255), nullable=True)
+    # Same for Depot In (the source gives each container its own): empty = same as the shipment's.
+    depot_in_address = Column(String(255), nullable=True)
 
     # TMS result: this container's own order number
     tms_order_no = Column(String(60), nullable=True)
@@ -221,20 +243,22 @@ class ShipmentContainer(Base):
 
 
 class ShipmentFile(Base):
-    """The one document a user drops on a shipment's row — what the flow attaches to the TMS
-    order (the arrival notice). One per shipment: a new drop replaces the old one. The file
-    lives under uploads/ (stored_path is relative to it); the job snapshots its absolute path."""
+    """A document attached to a shipment, classified by the user as one TMS document type (ANDER, CUSTOMS,
+    DN ...): the flow drops it on that type's zone of the order's Document Types add-in. A type can hold
+    several files. The file lives under uploads/ (stored_path is relative to it); the job snapshots its
+    absolute path."""
     __tablename__ = "shipment_files"
 
     id = Column(Integer, primary_key=True)
-    shipment_id = Column(Integer, ForeignKey("shipments.id"), unique=True, nullable=False)
+    shipment_id = Column(Integer, ForeignKey("shipments.id"), nullable=False)
+    doc_type = Column(String(20), nullable=False, default="ANDER")
     original_name = Column(String(255), nullable=False)
     stored_path = Column(String(500), nullable=False)
     size = Column(Integer, nullable=False)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     uploaded_at = Column(DateTime, default=utcnow, nullable=False)
 
-    shipment = relationship("Shipment", back_populates="file")
+    shipment = relationship("Shipment", back_populates="files")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

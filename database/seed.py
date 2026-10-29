@@ -11,6 +11,7 @@ import os
 import secrets
 
 from database.db import SessionLocal, init_db
+from database.lookups import seed_lookups
 from database.models import User
 from helpers.jwt_utils import hash_password
 
@@ -27,6 +28,7 @@ def seed():
     init_db()
     session = SessionLocal()
     try:
+        seed_lookups(session)       # customer / warehouse name suggestions for Admin > Clients
         if not session.query(User).filter_by(role="admin").first():
             password = os.getenv("ADMIN_INITIAL_PASSWORD") or secrets.token_urlsafe(12)
             session.add(User(name="Administrator", username=DEFAULT_ADMIN_USERNAME,

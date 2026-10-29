@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy import MetaData, create_engine, event, inspect, text
 from sqlalchemy.orm import scoped_session, sessionmaker
 
-from database.models import Base
+from database.models import Base, Client, Shipment
 
 DB_DIR = Path(__file__).parent
 DB_PATH = os.getenv("DATABASE_PATH", str(DB_DIR / "app.db"))
@@ -15,11 +15,11 @@ engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread"
 @event.listens_for(engine, "connect")
 def _set_sqlite_pragmas(dbapi_connection, _):
     # WAL: readers and the writer don't block each other. busy_timeout: a write that
-    # hits a momentary lock waits up to 5s instead of failing. foreign_keys: SQLite
+    # hits a momentary lock waits up to 30s instead of failing. foreign_keys: SQLite
     # ignores FK constraints unless asked.
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
@@ -163,6 +163,105 @@ def _migrate_first_order_no():
         conn.execute(text("ALTER TABLE shipments ADD COLUMN tms_first_order_no VARCHAR(60)"))
 
 
+def _migrate_file_types():
+    """shipment_files was one file per shipment (unique shipment_id, no type). It is now many files, each with a
+    document type. SQLite cannot drop a unique constraint, so the table is rebuilt; every existing file keeps its
+    row and becomes type ANDER (what the single file always was)."""
+    insp = inspect(engine)
+    if "shipment_files" not in insp.get_table_names():
+        return
+    if any(c["name"] == "doc_type" for c in insp.get_columns("shipment_files")):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE shipment_files RENAME TO shipment_files_old"))
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO shipment_files (id, shipment_id, doc_type, original_name, stored_path, size, uploaded_by, uploaded_at) "
+            "SELECT id, shipment_id, 'ANDER', original_name, stored_path, size, uploaded_by, uploaded_at FROM shipment_files_old"))
+        conn.execute(text("DROP TABLE shipment_files_old"))
+
+
+def _migrate_container_depot_out():
+    """shipment_containers.depot_out_address — a container's own Depot Out when it differs from the shipment's."""
+    insp = inspect(engine)
+    if "shipment_containers" not in insp.get_table_names():
+        return
+    if any(c["name"] == "depot_out_address" for c in insp.get_columns("shipment_containers")):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE shipment_containers ADD COLUMN depot_out_address VARCHAR(255)"))
+
+
+def _migrate_container_depot_in():
+    """shipment_containers.depot_in_address — a container's own Depot In when it differs from the shipment's."""
+    insp = inspect(engine)
+    if "shipment_containers" not in insp.get_table_names():
+        return
+    if any(c["name"] == "depot_in_address" for c in insp.get_columns("shipment_containers")):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE shipment_containers ADD COLUMN depot_in_address VARCHAR(255)"))
+
+
+def _migrate_shipment_remarks():
+    """shipments.remarks — the pick-up / return note built from the VGM closing date and the closing date."""
+    insp = inspect(engine)
+    if "shipments" not in insp.get_table_names():
+        return
+    if any(c["name"] == "remarks" for c in insp.get_columns("shipments")):
+        return
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE shipments ADD COLUMN remarks VARCHAR(255)"))
+
+
+def _migrate_shipment_key_bl():
+    """A shipment is now one BL number (all containers on a BL), not one ITOS number: the unique key moves from
+    (client_id, itos_no) to (client_id, bl_number) and itos_no becomes a plain nullable field. SQLite cannot
+    change a constraint in place, so the table is rebuilt the documented way (foreign keys off, copy, swap) —
+    every row keeps its id, so containers, files and jobs stay attached. A shipment without a BL number takes
+    its ITOS number as the BL; two shipments of one client that would share a BL stop the migration."""
+    insp = inspect(engine)
+    if "shipments" not in insp.get_table_names():
+        return
+    uniques = [tuple(u["column_names"]) for u in insp.get_unique_constraints("shipments")]
+    if ("client_id", "itos_no") not in uniques:
+        return
+    old_cols = [c["name"] for c in insp.get_columns("shipments")]
+    with engine.connect() as conn:
+        dup = conn.execute(text(
+            "SELECT client_id, COALESCE(NULLIF(TRIM(bl_number), ''), itos_no) AS bl, COUNT(*) FROM shipments "
+            "GROUP BY client_id, bl HAVING COUNT(*) > 1")).fetchall()
+        if dup:
+            raise RuntimeError("Cannot key shipments by BL number: these (client id, BL) are used by more than one "
+                               f"shipment: {[(d[0], d[1]) for d in dup]}. Fix them by hand in database/app.db.")
+    md = MetaData()
+    Client.__table__.to_metadata(md)                      # only so the foreign key resolves; it is not created
+    new_table = Shipment.__table__.to_metadata(md, name="shipments_new")
+    cols = ", ".join(c for c in old_cols if c in new_table.c)
+    select = ", ".join("COALESCE(NULLIF(TRIM(bl_number), ''), itos_no)" if c == "bl_number" else c
+                       for c in old_cols if c in new_table.c)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS shipments_new"))      # left over from an earlier failed attempt
+    new_table.create(bind=engine)
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        cur.execute("PRAGMA foreign_keys=OFF")           # must be set outside a transaction
+        try:
+            cur.execute(f"INSERT INTO shipments_new ({cols}) SELECT {select} FROM shipments")
+            cur.execute("DROP TABLE shipments")
+            cur.execute("ALTER TABLE shipments_new RENAME TO shipments")
+            raw.commit()
+        except Exception:
+            raw.rollback()
+            raise
+        finally:
+            cur.execute("PRAGMA foreign_keys=ON")        # this connection goes back to the pool
+    finally:
+        raw.close()
+
+
 def init_db():
     _migrate_remove_tasks()
     _migrate_remove_credits()
@@ -171,3 +270,8 @@ def init_db():
     _migrate_depot_addresses_per_client()
     Base.metadata.create_all(bind=engine)
     _migrate_first_order_no()
+    _migrate_file_types()
+    _migrate_container_depot_out()
+    _migrate_shipment_key_bl()
+    _migrate_container_depot_in()
+    _migrate_shipment_remarks()

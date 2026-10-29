@@ -2,8 +2,10 @@ from functools import wraps
 
 from flask import Blueprint, g, jsonify, request
 
-from admin import service
+from admin import dashboard, service
+from database import source_sync
 from database.db import SessionLocal
+from helpers.audit import audit
 from helpers.decorators import role_required
 
 bp = Blueprint("admin_api", __name__, url_prefix="/api/admin")
@@ -47,6 +49,13 @@ def clients_create(session, actor):
 @api
 def clients_update(session, actor, client_id):
     return service.update_client(session, actor, client_id, body())
+
+
+# Source names (customer / warehouse suggestions for the Add client form)
+@bp.route("/lookups", methods=["GET"])
+@api
+def lookups_list(session, actor):
+    return service.list_lookups(session)
 
 
 # Depot addresses
@@ -106,8 +115,89 @@ def tms_delete(session, actor, user_id):
     return service.delete_tms_credential(session, actor, user_id)
 
 
+# Shipment source sync (database/source_sync.py): POST ?dry_run=1 previews, GET returns the last result
+@bp.route("/sync", methods=["POST"])
+@api
+def sync_run(session, actor):
+    dry = request.args.get("dry_run") == "1"
+    try:
+        result = source_sync.sync(session, dry_run=dry)
+    except source_sync.SourceError as e:
+        raise service.ServiceError(str(e), 502)
+    if not dry:
+        audit(session, actor, "source_sync", None,
+              f'{result["fetched"]} rows; shipments {result["shipments"]}; containers {result["containers"]}')
+        session.commit()
+    return result
+
+
+@bp.route("/sync", methods=["GET"])
+@api
+def sync_last(session, actor):
+    return source_sync.last_result or {}
+
+
 # Audit
 @bp.route("/audit", methods=["GET"])
 @api
 def audit_list(session, actor):
     return service.list_audit(session)
+
+
+# Dashboard — who created which orders (see admin/dashboard.py for what is counted)
+def _period():
+    return dashboard.resolve_period(request.args.get("period"), request.args.get("since"),
+                                    request.args.get("until"), request.args.get("tz"))
+
+
+def _dash(fn):
+    """Like api(), but dashboard errors (bad period) become a JSON 400."""
+    @wraps(fn)
+    @role_required("admin")
+    def wrapper(**kwargs):
+        session = SessionLocal()
+        try:
+            return jsonify(fn(session, **kwargs))
+        except dashboard.DashboardError as e:
+            return jsonify({"error": e.message}), e.status
+        finally:
+            session.close()
+    return wrapper
+
+
+def _filters():
+    return {"user_id": request.args.get("user_id", type=int), "client_id": request.args.get("client_id", type=int)}
+
+
+@bp.route("/stats", methods=["GET"])
+@_dash
+def dash_stats(session):
+    return dashboard.stats(session, client_id=request.args.get("client_id", type=int), tz_name=request.args.get("tz"))
+
+
+@bp.route("/stats/by-client", methods=["GET"])
+@_dash
+def dash_by_client(session):
+    return dashboard.by_client(session, *_period())
+
+
+@bp.route("/jobs/summary", methods=["GET"])
+@_dash
+def dash_summary(session):
+    return dashboard.summary(session, *_period(), search=request.args.get("search") or None, **_filters())
+
+
+@bp.route("/jobs/productivity", methods=["GET"])
+@_dash
+def dash_productivity(session):
+    return dashboard.productivity(session, *_period(), search=request.args.get("search") or None, **_filters())
+
+
+@bp.route("/jobs", methods=["GET"])
+@_dash
+def dash_jobs(session):
+    since = until = None
+    if request.args.get("period"):
+        since, until = _period()
+    return dashboard.job_list(session, since=since, until=until, limit=request.args.get("limit", 200, type=int),
+                              **_filters())

@@ -1071,7 +1071,8 @@
     <h1>TMS Platform — Admin</h1>
     <div class="header-right">
       <div class="tabs">
-        <button class="tab-btn active" data-tab="users">Users</button>
+        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-btn" data-tab="users">Users</button>
         <button class="tab-btn" data-tab="clients">Clients</button>
         <button class="tab-btn" data-tab="addresses">Addresses</button>
         <button class="tab-btn" data-tab="audit">Audit log</button>
@@ -1081,8 +1082,142 @@
   </header>
 
   <main>
+    <!-- ═══════════════════ DASHBOARD TAB ═══════════════════ -->
+    <div class="tab-panel active" id="tab-dashboard">
+      <div class="stat-row">
+        <div class="stat-tile">
+          <div class="label">Total orders</div>
+          <div class="value" id="stat-total">—</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Success rate</div>
+          <div class="value good" id="stat-rate">—</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Orders today</div>
+          <div class="value" id="stat-today">—</div>
+        </div>
+        <div class="stat-tile">
+          <div class="label">Orders this week</div>
+          <div class="value" id="stat-week">—</div>
+        </div>
+      </div>
+
+      <div class="panel full" style="margin-bottom:20px">
+        <h2>Orders created — last 14 days</h2>
+        <p class="panel-sub">TMS orders (one per container) by the day the run finished · "Success rate" is shipments completed without a problem</p>
+        <div class="filter-row">
+          <select id="chart-filter-client">
+            <option value="">All clients</option>
+          </select>
+        </div>
+        <div id="chart-wrap">
+          <svg id="chart-svg" width="100%" height="220" viewBox="0 0 1080 220" preserveAspectRatio="none"></svg>
+          <div id="chart-tooltip"></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h2>Orders by client</h2>
+          <p class="panel-sub">total orders per client for the selected period</p>
+          <div class="filter-row">
+            <select id="client-bar-period">
+              <option value="today">Today</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="custom-range" id="client-bar-custom-range" style="display:none">
+            <input type="date" id="client-bar-since" />
+            <span class="range-sep">to</span>
+            <input type="date" id="client-bar-until" />
+            <button type="button" class="period-apply" id="client-bar-apply-btn">Apply</button>
+          </div>
+          <div id="client-bar-wrap">
+            <svg id="client-bar-svg" width="100%" height="220" viewBox="0 0 520 220" preserveAspectRatio="none"></svg>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Orders by client — share</h2>
+          <p class="panel-sub">each slice is a client's share of the orders in the selected period</p>
+          <div class="filter-row">
+            <select id="client-pie-period">
+              <option value="today">Today</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="custom-range" id="client-pie-custom-range" style="display:none">
+            <input type="date" id="client-pie-since" />
+            <span class="range-sep">to</span>
+            <input type="date" id="client-pie-until" />
+            <button type="button" class="period-apply" id="client-pie-apply-btn">Apply</button>
+          </div>
+          <div class="pie-row">
+            <svg id="client-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
+            <div class="pie-legend" id="client-pie-legend"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel full">
+        <h2>Orders by user · client</h2>
+        <p class="panel-sub">click a row for the individual shipments behind that count</p>
+        <div class="filter-row">
+          <div class="period-group" id="period-group">
+            <button type="button" class="period-seg active" data-period="today">Today</button>
+            <button type="button" class="period-seg" data-period="week">This week</button>
+            <button type="button" class="period-seg" data-period="month">This month</button>
+            <button type="button" class="period-seg" data-period="custom">Custom</button>
+          </div>
+          <div class="custom-range" id="custom-range" style="display:none">
+            <input type="date" id="custom-since" />
+            <span class="range-sep">to</span>
+            <input type="date" id="custom-until" />
+            <button type="button" class="period-apply" id="custom-apply-btn">Apply</button>
+          </div>
+          <select id="filter-user">
+            <option value="">All users</option>
+          </select>
+          <select id="filter-client">
+            <option value="">All clients</option>
+          </select>
+          <div class="period-group"><button type="button" class="period-seg"
+              id="productivity-toggle">Productivity</button></div>
+          <input type="search" id="summary-search" class="search-input" placeholder="Search…" />
+        </div>
+        <div class="table-scroll">
+          <table id="summary-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Client</th>
+                <th>Orders</th>
+                <th>Shipments</th>
+                <th>Last run</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+            <tfoot></tfoot>
+          </table>
+        </div>
+        <div id="productivity-section" style="display:none">
+          <h2 style="margin-top:20px">Productivity — orders per team member</h2>
+          <p class="panel-sub">reflects the filters above</p>
+          <div class="pie-row">
+            <svg id="productivity-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
+            <div class="pie-legend" id="productivity-pie-legend"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ═══════════════════ USERS TAB ═══════════════════ -->
-    <div class="tab-panel active" id="tab-users">
+    <div class="tab-panel" id="tab-users">
       <div class="grid-2">
         <div class="panel">
           <h2 id="user-form-title">Add user</h2>
@@ -1169,10 +1304,14 @@
         <div class="panel">
           <h2 id="client-form-title">Add client</h2>
           <p class="panel-sub">a client is one customer at one warehouse — Emvia with two warehouses is two clients.
-            Every shipment is created in TMS under the client's customer no. and trade lane.</p>
+            Pick the customer and warehouse exactly as the source database spells them: the sync loads only the
+            shipments of the clients added here. Every shipment is created in TMS under the client's customer no. and
+            trade lane.</p>
           <div class="row">
-            <div><label for="client-name">Client name</label><input id="client-name" placeholder="e.g. Emvia" /></div>
-            <div><label for="client-warehouse">Warehouse</label><input id="client-warehouse" placeholder="e.g. 1147 or NNRC" /></div>
+            <div><label for="client-name">Client name</label><input id="client-name" list="lookup-clients" autocomplete="off"
+                placeholder="pick or type, as in the source" /><datalist id="lookup-clients"></datalist></div>
+            <div><label for="client-warehouse">Warehouse</label><input id="client-warehouse" list="lookup-warehouses" autocomplete="off"
+                placeholder="pick or type, as in the source" /><datalist id="lookup-warehouses"></datalist></div>
           </div>
           <div class="row">
             <div><label for="client-customer-no">TMS customer no.</label><input id="client-customer-no"
@@ -1195,6 +1334,17 @@
             <div class="value good" id="client-stat-ready">—</div>
           </div>
         </div>
+      </div>
+
+      <div class="panel full">
+        <h2>Shipments from the source database</h2>
+        <p class="panel-sub">Reads the source table (read-only) for the clients added below and loads their shipments here:
+          all containers on the same BL number become one shipment. Shipments already queued, running, done or in TMS
+          are never changed. Preview first to see what would change.</p>
+        <button class="primary" id="sync-preview-btn" style="background:#2a2f3a">Preview</button>
+        <button class="primary" id="sync-run-btn">Sync from source</button>
+        <div class="msg" id="sync-msg"></div>
+        <div id="sync-detail" class="panel-sub" style="margin-top:12px"></div>
       </div>
 
       <div class="panel full">
@@ -1298,6 +1448,33 @@
       </div>
     </div>
   </main>
+
+  <div id="modal-overlay">
+    <div id="modal">
+      <div id="modal-header">
+        <div id="modal-title"></div>
+        <button type="button" id="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="modal-sub"></div>
+      <div id="modal-body">
+        <div class="table-scroll">
+          <table id="modal-table">
+            <thead>
+              <tr>
+                <th>Finished</th>
+                <th>ITOS</th>
+                <th>File No.</th>
+                <th>Orders</th>
+                <th>Status</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/auth/client.js"></script>
   <script src="/admin/admin.js"></script>

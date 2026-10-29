@@ -1,7 +1,8 @@
 """
-Storage for the document dropped on a shipment's row.
+Storage for the documents attached to a shipment.
 
-One file per shipment: a new drop replaces the old one. Files live in
+A shipment holds any number of files; the USER classifies each one by the box of the attach panel it was dropped
+in (ANDER, CUSTOMS, DN ...), and the flow later drops it on that type's zone in TMS. Files live in
 uploads/shipment_files/<shipment id>/<random>_<clean name>; the database keeps the original
 name for display and the path relative to uploads/. The stored name is generated here, never
 taken from the request, so a crafted file name cannot escape the folder.
@@ -22,6 +23,12 @@ ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".doc", 
                       ".xls", ".xlsx", ".csv", ".txt", ".msg", ".eml"}
 
 
+# The document types offered in the attach panel, in display order: (TMS Document Types zone id, label).
+# The id is the `div.docTypedCol#<id>` the flow drops the file on, so it must match TMS exactly.
+DOC_TYPES = [("ANDER", "ANDER"), ("CUSTOMS", "CUSTOMS"), ("DN", "DN")]
+DOC_TYPE_IDS = {t for t, _ in DOC_TYPES}
+
+
 class FileRejected(Exception):
     """The upload is refused; the message is shown to the user."""
 
@@ -34,9 +41,11 @@ def exists(sf: ShipmentFile) -> bool:
     return absolute_path(sf).is_file()
 
 
-def save_upload(session, shipment, upload, user_id: int) -> ShipmentFile:
-    """Store `upload` (a werkzeug FileStorage) as the shipment's file, replacing any previous
-    one. Commits. Raises FileRejected for a bad type, an empty file or one that is too big."""
+def save_upload(session, shipment, upload, user_id: int, doc_type: str) -> ShipmentFile:
+    """Store `upload` (a werkzeug FileStorage) as one more document of `doc_type` on the shipment. Commits.
+    Raises FileRejected for an unknown type, a bad file type, an empty file or one that is too big."""
+    if doc_type not in DOC_TYPE_IDS:
+        raise FileRejected("Unknown document type.")
     original = (upload.filename or "").strip()
     ext = Path(original).suffix.lower()
     if not original or ext not in ALLOWED_EXTENSIONS:
@@ -51,25 +60,20 @@ def save_upload(session, shipment, upload, user_id: int) -> ShipmentFile:
         destination.unlink(missing_ok=True)
         raise FileRejected("The file is empty." if size == 0 else
                            f"The file is too big (limit {MAX_BYTES // (1024 * 1024)} MB).")
-
-    old = shipment.file
-    old_path = absolute_path(old) if old else None
-    if old:
-        old.original_name, old.stored_path, old.size, old.uploaded_by = original, relative.as_posix(), size, user_id
-        sf = old
-    else:
-        sf = ShipmentFile(shipment_id=shipment.id, original_name=original, stored_path=relative.as_posix(),
-                          size=size, uploaded_by=user_id)
-        session.add(sf)
+    sf = ShipmentFile(shipment_id=shipment.id, doc_type=doc_type, original_name=original,
+                      stored_path=relative.as_posix(), size=size, uploaded_by=user_id)
+    session.add(sf)
     session.commit()
-    if old_path is not None:
-        old_path.unlink(missing_ok=True)
     return sf
 
 
-def remove(session, shipment) -> bool:
-    """Delete the shipment's file (row and disk). Commits. False if there was none."""
-    sf = shipment.file
+def get(shipment, file_id: int):
+    return next((f for f in shipment.files if f.id == file_id), None)
+
+
+def remove(session, shipment, file_id: int) -> bool:
+    """Delete one of the shipment's files (row and disk). Commits. False if it is not this shipment's."""
+    sf = get(shipment, file_id)
     if sf is None:
         return False
     path = absolute_path(sf)

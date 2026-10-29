@@ -64,10 +64,10 @@ def _depot(session, client, name, reference, date, problems, label):
 
 
 def _flow_problems(client: Client, payload: dict) -> list[str]:
-    """Ask the customer's flow (clients/<customer>/tms_create.py) whether it can handle this shipment, so
+    """Ask the customer's flow (clients/<customer>.py) whether it can handle this shipment, so
     one it cannot is refused here instead of being half-created in TMS."""
     try:
-        module = importlib.import_module(f"clients.{slugify(client.client_name)}.tms_create")
+        module = importlib.import_module(f"clients.{slugify(client.client_name)}")
     except ImportError:
         return []
     check = getattr(module, "check_payload", None)
@@ -97,16 +97,26 @@ def build_payload(session, client: Client, shipment: Shipment):
         },
         "containers": [{"id": c.id, "container_no": c.container_no, "container_type": c.container_type,
                         "seal_no": c.seal_no, "goods": c.goods, "qty": _num(c.qty),
-                        "gross_weight": _num(c.gross_weight)} for c in shipment.containers],
-        "file": None,
+                        "gross_weight": _num(c.gross_weight),
+                        # only when this container's Depot Out differs from the shipment's
+                        "depot_out": _depot(session, client, c.depot_out_address, shipment.depot_out_reference,
+                                            shipment.depot_out_date, problems,
+                                            f"Depot out of container {c.container_no}"),
+                        # likewise only when this container's Depot In differs from the shipment's
+                        "depot_in": _depot(session, client, c.depot_in_address, shipment.depot_in_reference,
+                                           shipment.depot_in_date, problems,
+                                           f"Depot in of container {c.container_no}"),
+                        } for c in shipment.containers],
+        "files": [],
     }
-    # The document dropped on the row: its absolute path is what the flow attaches in TMS.
-    if shipment.file is not None:
-        if shipment_files.exists(shipment.file):
-            payload["file"] = {"path": str(shipment_files.absolute_path(shipment.file)),
-                               "name": shipment.file.original_name, "size": shipment.file.size}
+    # The documents attached to the shipment, each with the type the user put it under: the absolute path is what
+    # the flow drops on that type's zone in TMS.
+    for f in shipment.files:
+        if shipment_files.exists(f):
+            payload["files"].append({"path": str(shipment_files.absolute_path(f)), "name": f.original_name,
+                                     "size": f.size, "doc_type": f.doc_type})
         else:
-            problems.append("its attached file is missing on the server — upload it again")
+            problems.append(f'its {f.doc_type} file "{f.original_name}" is missing on the server — upload it again')
     problems.extend(_flow_problems(client, payload))
     return payload, problems
 
@@ -253,6 +263,7 @@ def recover_interrupted(session) -> int:
     for job in session.query(TmsJob).filter_by(status="running").all():
         n += 1
         if job.stage == "start":
+            job.attempts = max(0, job.attempts - 1)          # being cut off is not the job's fault
             job.status = "queued"
             job.shipment.tms_status = "queued"
             job.shipment.tms_error = None

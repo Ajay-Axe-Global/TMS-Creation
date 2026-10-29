@@ -1,4 +1,4 @@
-"""Errors a client's TMS order flow (clients/<customer>/tms_create.py) can raise to the worker."""
+"""Errors a client's TMS order flow (clients/<customer>.py) can raise to the worker."""
 
 
 class FlowNotReady(Exception):

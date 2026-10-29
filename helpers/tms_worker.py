@@ -1,12 +1,12 @@
 """
 The TMS worker: turns queued jobs (helpers/jobs.py) into real browser runs.
 
-For each claimed job, in its own freshly opened browser and a fresh context loaded with
+For each claimed job, in a slot of the browser pool and a fresh context loaded with
 THE REQUESTING USER'S saved TMS session:
     1. log in (helpers/tms_login.py) — answers the Microsoft phone call flow, then saves
        the session so the next job for that user starts already signed in
     2. navigate (helpers/tms_nav.py): Home -> Orders -> New, or List -> New
-    3. fill the order (clients/<customer>/tms_create.py)  <- not built yet, see there
+    3. fill the order (clients/<customer>.py)  <- not built yet, see there
 
 Safety switch: TMS_CREATE_ENABLED defaults to OFF. The live TMS may create a blank order
 the moment +New is clicked, so with the switch off a job is a DRY RUN — it logs in, saves
@@ -14,8 +14,9 @@ the session and reaches the Orders list, but never clicks New. Turn it on in .en
 when creation is meant to happen.
 
 Settings (.env):
-    TMS_WORKERS          browsers working in parallel (default 1; 0 = no worker in this process).
-                         Each runs one job at a time; one user never has two jobs at once.
+    TMS_BROWSERS         Chromium browsers in the pool (default 3; 0 = no pool in this process)
+    TMS_SLOTS            job slots per browser (default 3)  -> 3 x 3 = 9 jobs at once. One user never has two.
+    (recycling, health, shutdown, queue-alert settings: see helpers/browser_pool.py)
     TMS_HEADLESS         1 = invisible browser (servers). Default 0: the browser window is
                          shown, so the login and the phone-call step can be watched.
     TMS_CREATE_ENABLED   see above (default false)
@@ -24,7 +25,6 @@ Settings (.env):
 import importlib
 import logging
 import os
-import threading
 from pathlib import Path
 
 from database.db import SessionLocal
@@ -54,10 +54,10 @@ def headless() -> bool:
 # ── one job ──────────────────────────────────────────────────────────────────
 
 def _load_flow(job: TmsJob):
-    """clients/<customer slug>/tms_create.py — the per-customer order-filling code."""
+    """clients/<customer slug>.py — the per-customer order-filling code."""
     flow_slug = slugify(job.payload["client"]["client_name"])
     try:
-        return importlib.import_module(f"clients.{flow_slug}.tms_create")
+        return importlib.import_module(f"clients.{flow_slug}")
     except ImportError:
         raise FlowNotReady(f"There is no TMS order flow for {job.payload['client']['client_name']} yet.")
 
@@ -147,11 +147,11 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
         return
 
     # Fail before opening a browser if the document to attach has gone missing.
-    attached = job.payload.get("file")
-    if attached and not Path(attached["path"]).is_file():
-        jobs.set_outcome(db, job, "failed", code="file_missing",
-                         message=f'The attached file "{attached["name"]}" is no longer on the server — upload it again.')
-        return
+    for attached in job.payload.get("files") or []:
+        if not Path(attached["path"]).is_file():
+            jobs.set_outcome(db, job, "failed", code="file_missing",
+                             message=f'The attached file "{attached["name"]}" is no longer on the server — upload it again.')
+            return
 
     context = page = None
     try:
@@ -236,60 +236,18 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
                 pass
 
 
-# ── worker threads ───────────────────────────────────────────────────────────
+# ── the pool ─────────────────────────────────────────────────────────────────
 
-class Worker(threading.Thread):
-    """One browser's worth of capacity: claims a job, opens a browser for it, runs it, closes."""
-
-    def __init__(self, number: int):
-        super().__init__(name=f"tms-worker-{number}", daemon=True)
-        self.stop_event = threading.Event()
-
-    def run(self):
-        poll = float(os.getenv("TMS_POLL_SECONDS", "2"))
-        while not self.stop_event.is_set():
-            job_id = None
-            try:
-                db = SessionLocal()
-                job_id = jobs.claim_next(db)
-            except Exception:
-                logger.exception("%s: could not claim a job", self.name)
-            finally:
-                SessionLocal.remove()
-            if job_id is None:
-                self.stop_event.wait(poll)
-                continue
-            self._run_one(job_id)
-
-    def _run_one(self, job_id: int):
-        from playwright.sync_api import sync_playwright
-        try:
-            db = SessionLocal()
-            with sync_playwright() as pw:
-                browser = tms_login.launch_browser(pw, headless=headless())
-                try:
-                    run_job(db, browser, job_id)
-                finally:
-                    browser.close()
-        except Exception as e:                               # browser could not even start, etc.
-            logger.exception("%s: job %s failed to run", self.name, job_id)
-            try:
-                db = SessionLocal()
-                job = db.get(TmsJob, job_id)
-                if job is not None and job.status == "running":
-                    jobs.set_outcome(db, job, "failed", code="worker_error", message=f"Worker error: {e}")
-            except Exception:
-                logger.exception("could not record the worker error for job %s", job_id)
-        finally:
-            SessionLocal.remove()
+_pool = None
 
 
-def start_workers(count: int | None = None) -> list[Worker]:
-    """Recover jobs a previous run left half-done, then start the worker threads."""
-    n = int(os.getenv("TMS_WORKERS", "1")) if count is None else count
-    if n <= 0:
-        logger.info("TMS workers disabled (TMS_WORKERS=0).")
-        return []
+def start_workers(count: int | None = None):
+    """Recover jobs a previous run left half-done, then start the browser pool (helpers/browser_pool.py)."""
+    global _pool
+    from helpers.browser_pool import BrowserPool
+    if os.getenv("TMS_WORKERS", "").strip() == "0" or os.getenv("TMS_BROWSERS", "").strip() == "0" or count == 0:
+        logger.info("TMS browser pool disabled.")
+        return None
     try:
         db = SessionLocal()
         recovered = jobs.recover_interrupted(db)
@@ -297,9 +255,24 @@ def start_workers(count: int | None = None) -> list[Worker]:
             logger.warning("Recovered %d interrupted job(s) after restart.", recovered)
     finally:
         SessionLocal.remove()
-    workers = [Worker(i + 1) for i in range(n)]
-    for w in workers:
-        w.start()
-    logger.info("Started %d TMS worker(s); creation %s; browser %s.", n,
-                "ENABLED" if create_enabled() else "off (dry run)", "hidden" if headless() else "visible")
-    return workers
+    _pool = BrowserPool(headless=headless())
+    _pool.start()
+    logger.info("TMS browser pool: up to %d browsers x %d slots; creation %s; browser %s.",
+                _pool.max_browsers, _pool.slots, "ENABLED" if create_enabled() else "off (dry run)",
+                "hidden" if headless() else "visible")
+    import atexit
+    import signal
+    atexit.register(stop_workers)
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: (stop_workers(), os._exit(0)))
+    except ValueError:                                       # not the main thread
+        pass
+    return _pool
+
+
+def stop_workers() -> None:
+    """Graceful stop: no new claims, running jobs get TMS_SHUTDOWN_GRACE seconds, then the browsers close."""
+    global _pool
+    pool, _pool = _pool, None
+    if pool is not None:
+        pool.stop()
