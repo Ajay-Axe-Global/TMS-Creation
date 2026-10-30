@@ -58,6 +58,31 @@ def lookups_list(session, actor):
     return service.list_lookups(session)
 
 
+# Carriers
+@bp.route("/carriers", methods=["GET"])
+@api
+def carriers_list(session, actor):
+    return service.list_carriers(session)
+
+
+@bp.route("/carriers", methods=["POST"])
+@api
+def carriers_create(session, actor):
+    return service.create_carrier(session, actor, body())
+
+
+@bp.route("/carriers/<int:carrier_id>", methods=["PUT"])
+@api
+def carriers_update(session, actor, carrier_id):
+    return service.update_carrier(session, actor, carrier_id, body())
+
+
+@bp.route("/carriers/<int:carrier_id>", methods=["DELETE"])
+@api
+def carriers_delete(session, actor, carrier_id):
+    return service.delete_carrier(session, actor, carrier_id)
+
+
 # Depot addresses
 @bp.route("/addresses", methods=["GET"])
 @api

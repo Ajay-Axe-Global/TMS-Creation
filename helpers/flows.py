@@ -1,5 +1,5 @@
 """
-Finds a customer's map: clients/<slug>/<slug>.py, where <slug> is the slug of the client's customer name
+Finds a customer's file: clients/<slug>/<slug>.py, where <slug> is the slug of the client's customer name
 ("Emvia" and "Emvia - NNRC" both use clients/emvia/emvia.py). The one place that knows this layout.
 """
 import importlib
@@ -10,8 +10,8 @@ from helpers.flow_errors import FlowNotReady
 
 
 def load(client_name: str):
-    """The customer's module, or None when there is no map for it yet. A map that exists but is broken (a typo
-    in its map, an import error inside it) is NOT treated as missing: it raises."""
+    """The customer's module, or None when there is no map for it yet. A file that exists but is broken (a typo
+    in its functions, an import error inside it) is NOT treated as missing: it raises."""
     slug = slugify(client_name)
     path = f"clients.{slug}.{slug}"
     try:
@@ -20,7 +20,7 @@ def load(client_name: str):
         if e.name and path.startswith(e.name):             # the map itself (or its package) does not exist
             return None
         raise
-    order_builder.Spec(flow)                               # validates the map
+    order_builder.Spec(flow)                               # checks the customer's functions
     return flow
 
 

@@ -13,6 +13,10 @@
     el.style.display = "block";
   }
 
+  const ICON_EDIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+  const ICON_DELETE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
+  const ICON_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>';
+  const ICON_ON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>';
   const emptyRow = (cols, text) => `<tr class="empty-row"><td colspan="${cols}">${esc(text)}</td></tr>`;
   const badge = (text, cls = "") => `<span class="badge ${cls}">${esc(text)}</span>`;
   const fmtTimestamp = iso => iso
@@ -30,9 +34,10 @@
       document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
       btn.classList.add("active");
       $(`tab-${btn.dataset.tab}`).classList.add("active");
-      loaders[btn.dataset.tab]().catch(err => alert(err.message));
+      loaders[btn.dataset.tab]().catch(err => ui.toast(err.message, "error"));
     });
   });
+  ui.themeToggle($("theme-btn"));
   $("logout-btn").addEventListener("click", () => Auth.logout());
 
   // ═══════════════════════════════════════════════════════════════════
@@ -146,10 +151,10 @@
         <td>${tmsLabel(u)}</td>
         <td>
           <div class="row-actions">
-            <button data-edit="${u.id}">Edit</button>
+            <button class="icon" title="Edit" aria-label="Edit" data-edit="${u.id}">${ICON_EDIT}</button>
             ${u.is_active
-        ? `<button class="danger" data-delete="${u.id}">Delete</button>`
-        : `<button class="reactivate" data-reactivate="${u.id}">Reactivate</button>`}
+        ? `<button class="icon danger" title="Delete" aria-label="Delete" data-delete="${u.id}">${ICON_DELETE}</button>`
+        : `<button class="icon reactivate" title="Reactivate" aria-label="Reactivate" data-reactivate="${u.id}">${ICON_ON}</button>`}
           </div>
         </td>
       </tr>`).join("");
@@ -157,18 +162,19 @@
     tbody.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => startEditUser(+b.dataset.edit)));
     tbody.querySelectorAll("[data-delete]").forEach(b => b.addEventListener("click", async () => {
       const u = usersCache.find(x => x.id === +b.dataset.delete);
-      if (!confirm(`Delete user "${u.username}"? Their job history is kept, but they will no longer be able to log in.`)) return;
+      if (!await ui.confirm({ title: `Delete user "${u.username}"?`, danger: true, confirmText: "Delete",
+        text: "Their job history is kept, but they will no longer be able to log in." })) return;
       try {
         await api(`/api/admin/users/${u.id}`, { method: "PUT", body: { is_active: false } });
         if (editingUserId === u.id) resetUserForm();
         await refreshUsers();
-      } catch (e) { alert(e.message); }
+      } catch (e) { ui.toast(e.message, "error"); }
     }));
     tbody.querySelectorAll("[data-reactivate]").forEach(b => b.addEventListener("click", async () => {
       try {
         await api(`/api/admin/users/${b.dataset.reactivate}`, { method: "PUT", body: { is_active: true } });
         await refreshUsers();
-      } catch (e) { alert(e.message); }
+      } catch (e) { ui.toast(e.message, "error"); }
     }));
   }
   $("users-filter-client").addEventListener("change", renderUsersTable);
@@ -226,8 +232,30 @@
     $("add-client-btn").textContent = "Add client";
     $("cancel-client-btn").style.display = "none";
     $("client-name").disabled = false;
-    ["client-name", "client-warehouse", "client-customer-no", "client-tradelane-no"].forEach(id => $(id).value = "");
+    ["client-name", "client-warehouse", "client-customer-no"].forEach(id => $(id).value = "");
+    setLaneRows([{ carrier: "ALL", tradelane_no: "" }]);
   }
+
+  let laneCarriers = ["ALL"];
+  function addLaneRow(carrier = "ALL", no = "") {
+    const row = document.createElement("div");
+    row.className = "lane-row";
+    row.innerHTML = `<div><select class="lane-carrier">${laneCarriers.map(k =>
+      `<option value="${esc(k)}"${k === carrier ? " selected" : ""}>${esc(k)}</option>`).join("")}</select></div>
+      <div><input class="lane-no" placeholder="e.g. TLVMT25-100245" value="${esc(no)}" /></div>
+      <div><button type="button" class="danger lane-del">Remove</button></div>`;
+    row.querySelector(".lane-del").addEventListener("click", () => row.remove());
+    $("tradelane-rows").appendChild(row);
+  }
+  function setLaneRows(rows) {
+    $("tradelane-rows").innerHTML = "";
+    rows.forEach(r => addLaneRow(r.carrier, r.tradelane_no));
+  }
+  function laneRows() {
+    return [...document.querySelectorAll("#tradelane-rows .lane-row")].map(r => ({
+      carrier: r.querySelector(".lane-carrier").value, tradelane_no: r.querySelector(".lane-no").value.trim() }));
+  }
+  $("add-lane-btn").addEventListener("click", () => addLaneRow(laneRows().some(r => r.carrier === "ALL") ? laneCarriers[1] : "ALL"));
   $("cancel-client-btn").addEventListener("click", resetClientForm);
 
   function startEditClient(id) {
@@ -241,7 +269,7 @@
     $("client-name").disabled = true;             // the client name names the flow code folder; the warehouse can be corrected
     $("client-warehouse").value = c.warehouse || "";
     $("client-customer-no").value = c.tms_customer_no || "";
-    $("client-tradelane-no").value = c.tms_tradelane_no || "";
+    setLaneRows(c.tradelanes.length ? c.tradelanes : [{ carrier: "ALL", tradelane_no: "" }]);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -251,7 +279,7 @@
       client_name: $("client-name").value.trim(),
       warehouse: $("client-warehouse").value.trim(),
       tms_customer_no: $("client-customer-no").value.trim(),
-      tms_tradelane_no: $("client-tradelane-no").value.trim(),
+      tradelanes: laneRows(),
     };
     const isEdit = editingClientId !== null;
     try {
@@ -272,14 +300,14 @@
         <td>${esc(c.client_name)} <span class="mono" style="color:var(--text-muted)">flow: ${esc(c.flow_slug)}</span></td>
         <td>${c.warehouse ? esc(c.warehouse) : badge("not set", "inactive")}</td>
         <td class="mono">${esc(c.tms_customer_no || "—")}</td>
-        <td class="mono">${esc(c.tms_tradelane_no || "—")}</td>
+        <td class="mono">${c.tradelanes.length ? c.tradelanes.map(t => `${esc(t.carrier)}: ${esc(t.tradelane_no)}`).join("<br>") : "—"}</td>
         <td class="num">${c.user_count}</td>
         <td>${c.ready ? badge(c.is_active ? "ready" : "inactive", c.is_active ? "status-success" : "inactive")
         : badge(c.warehouse ? "needs customer no. + trade lane" : "needs warehouse", "inactive")}</td>
         <td><div class="row-actions">
-          <button data-edit-client="${c.id}">Edit</button>
-          ${c.is_active ? `<button class="danger" data-toggle-client="${c.id}">Deactivate</button>`
-        : `<button class="reactivate" data-toggle-client="${c.id}">Reactivate</button>`}
+          <button class="icon" title="Edit" aria-label="Edit" data-edit-client="${c.id}">${ICON_EDIT}</button>
+          ${c.is_active ? `<button class="icon danger" title="Deactivate" aria-label="Deactivate" data-toggle-client="${c.id}">${ICON_OFF}</button>`
+        : `<button class="icon reactivate" title="Reactivate" aria-label="Reactivate" data-toggle-client="${c.id}">${ICON_ON}</button>`}
         </div></td>
       </tr>`).join("") : emptyRow(7, "No clients yet.");
 
@@ -288,7 +316,7 @@
     document.querySelectorAll("[data-toggle-client]").forEach(b => b.addEventListener("click", async () => {
       const c = clientsCache.find(x => x.id === +b.dataset.toggleClient);
       try { await api(`/api/admin/clients/${c.id}`, { method: "PUT", body: { is_active: !c.is_active } }); await loadClientsTab(); }
-      catch (e) { alert(e.message); }
+      catch (e) { ui.toast(e.message, "error"); }
     }));
   }
 
@@ -326,11 +354,80 @@
       const opts = a => a.map(n => `<option value="${esc(n)}"></option>`).join("");
       $("lookup-clients").innerHTML = opts(l.clients);
       $("lookup-warehouses").innerHTML = opts(l.warehouses);
+      laneCarriers = l.carriers;
+      if (!document.querySelector("#tradelane-rows .lane-row")) resetClientForm();
     }).catch(() => {});
     await loadCatalog();
     fillClientSelects();
     updateUserStatCards();
     renderClientsTables();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Carriers tab (shipping lines: TMS shortcut + the source's spellings)
+  // ═══════════════════════════════════════════════════════════════════
+  let carriersCache = [];
+  let editingCarrierId = null;
+
+  function resetCarrierForm() {
+    editingCarrierId = null;
+    $("carrier-form-title").textContent = "Add carrier";
+    $("add-carrier-btn").textContent = "Add carrier";
+    $("cancel-carrier-btn").style.display = "none";
+    $("carrier-code").disabled = false;
+    $("carrier-code").value = $("carrier-names").value = "";
+  }
+  $("cancel-carrier-btn").addEventListener("click", resetCarrierForm);
+
+  function startEditCarrier(id) {
+    const c = carriersCache.find(x => x.id === id);
+    if (!c) return;
+    editingCarrierId = id;
+    $("carrier-form-title").textContent = `Edit carrier: ${c.code}`;
+    $("add-carrier-btn").textContent = "Update carrier";
+    $("cancel-carrier-btn").style.display = "block";
+    $("carrier-code").value = c.code;
+    $("carrier-code").disabled = true;            // trade lanes refer to the shortcut
+    $("carrier-names").value = c.names;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  $("add-carrier-btn").addEventListener("click", async () => {
+    const msg = $("carrier-msg");
+    const isEdit = editingCarrierId !== null;
+    try {
+      const data = await api(isEdit ? `/api/admin/carriers/${editingCarrierId}` : "/api/admin/carriers",
+        { method: isEdit ? "PUT" : "POST",
+          body: { code: $("carrier-code").value.trim(), names: $("carrier-names").value.trim() } });
+      showMsg(msg, isEdit ? `Updated ${data.code}.` : `Added ${data.code}.`, true);
+      resetCarrierForm();
+      await loadCarriersTab();
+    } catch (e) { showMsg(msg, e.message, false); }
+  });
+
+  async function loadCarriersTab() {
+    carriersCache = await api("/api/admin/carriers");
+    $("carrier-stat-total").textContent = carriersCache.length.toLocaleString();
+    document.querySelector("#carriers-table tbody").innerHTML = carriersCache.length
+      ? carriersCache.map(c => `
+        <tr>
+          <td class="mono">${esc(c.code)}</td>
+          <td>${esc(c.names) || "—"}</td>
+          <td><div class="row-actions">
+            <button class="icon" title="Edit" aria-label="Edit" data-edit-carrier="${c.id}">${ICON_EDIT}</button>
+            <button class="icon danger" title="Delete" aria-label="Delete" data-delete-carrier="${c.id}">${ICON_DELETE}</button>
+          </div></td>
+        </tr>`).join("")
+      : emptyRow(3, "No carriers yet.");
+    document.querySelectorAll("[data-edit-carrier]").forEach(b =>
+      b.addEventListener("click", () => startEditCarrier(+b.dataset.editCarrier)));
+    document.querySelectorAll("[data-delete-carrier]").forEach(b => b.addEventListener("click", async () => {
+      const c = carriersCache.find(x => x.id === +b.dataset.deleteCarrier);
+      if (!await ui.confirm({ title: `Delete carrier ${c.code}?`, danger: true, confirmText: "Delete",
+        text: "Shipments on it will be sent to TMS with no carrier." })) return;
+      try { await api(`/api/admin/carriers/${c.id}`, { method: "DELETE" }); await loadCarriersTab(); }
+      catch (e) { ui.toast(e.message, "error"); }
+    }));
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -374,6 +471,7 @@
   });
 
   async function loadAddressesTab() {
+    loadCarriersTab();                       // the carriers share this tab
     const data = await api("/api/admin/addresses");
     addressesCache = data.addresses;
     $("addr-stat-mapped").textContent = data.addresses.length.toLocaleString();
@@ -396,8 +494,8 @@
           <td>${esc(a.name)}</td>
           <td class="mono">${esc(a.tms_address_no)}</td>
           <td><div class="row-actions">
-            <button data-edit-address="${a.id}">Edit</button>
-            <button class="danger" data-delete-address="${a.id}">Delete</button>
+            <button class="icon" title="Edit" aria-label="Edit" data-edit-address="${a.id}">${ICON_EDIT}</button>
+            <button class="icon danger" title="Delete" aria-label="Delete" data-delete-address="${a.id}">${ICON_DELETE}</button>
           </div></td>
         </tr>`).join("")
       : emptyRow(3, "No depot addresses yet.");
@@ -406,9 +504,10 @@
       b.addEventListener("click", () => startEditAddress(+b.dataset.editAddress)));
     document.querySelectorAll("[data-delete-address]").forEach(b => b.addEventListener("click", async () => {
       const a = addressesCache.find(x => x.id === +b.dataset.deleteAddress);
-      if (!confirm(`Delete "${a.name}" → ${a.tms_address_no}? Shipments using this depot will show as not mapped.`)) return;
+      if (!await ui.confirm({ title: `Delete "${a.name}" → ${a.tms_address_no}?`, danger: true, confirmText: "Delete",
+        text: "Shipments using this depot will show as not mapped." })) return;
       try { await api(`/api/admin/addresses/${a.id}`, { method: "DELETE" }); await loadAddressesTab(); }
-      catch (e) { alert(e.message); }
+      catch (e) { ui.toast(e.message, "error"); }
     }));
   }
 
@@ -417,13 +516,13 @@
   // An "order" is a TMS order number (one per container); see admin/dashboard.py.
   // ═══════════════════════════════════════════════════════════════════
   const VIEWER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const CHART_COLOR = "#4f7cff";
-  const PALETTE = ["#4f7cff", "#f59e0b", "#34d399", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#c084fc", "#facc15", "#38bdf8"];
+  const chartColor = () => ui.color("--accent");
+  const PALETTE = ["#2563eb", "#d97706", "#16a34a", "#dc2626", "#7c3aed", "#0891b2", "#ea580c", "#c026d3", "#ca8a04", "#0284c7"];
   // Same client = same colour in the bar and the pie (position in the client list, which is stable).
   const clientColor = id => PALETTE[Math.max(0, clientsCache.findIndex(c => c.id === id)) % PALETTE.length];
   const truncate = (s, n = 40) => !s ? "—" : (s.length > n ? s.slice(0, n - 1) + "…" : s);
   const debounce = (fn, wait) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), wait); }; };
-  const mono = "JetBrains Mono, monospace";
+  const mono = "DM Mono, monospace";
 
   function rectPath(x, y, w, h, topRadius, fill) {
     const r = Math.min(topRadius, h, w / 2);
@@ -435,28 +534,32 @@
     let g = "";
     for (let i = 0; i <= 4; i++) {
       const y = padT + plotH - (plotH * i) / 4;
-      g += `<line x1="${padL}" y1="${y}" x2="${W - 10}" y2="${y}" stroke="#2c2c2a" stroke-width="1" />`;
-      g += `<text x="${padL - 8}" y="${y + 3}" text-anchor="end" font-size="10" fill="#6b7280" font-family="${mono}">${Math.round((niceMax * i) / 4)}</text>`;
+      g += `<line x1="${padL}" y1="${y}" x2="${W - 10}" y2="${y}" stroke="${ui.color("--border")}" stroke-width="1" />`;
+      g += `<text x="${padL - 8}" y="${y + 3}" text-anchor="end" font-size="10" fill="${ui.color("--muted")}" font-family="${mono}">${Math.round((niceMax * i) / 4)}</text>`;
     }
     return g;
   }
 
   function drawDayChart(days) {
     const svg = $("chart-svg"), tooltip = $("chart-tooltip");
-    const W = 1080, H = 220, padL = 30, padB = 26, padT = 22;
+    const W = Math.max(480, Math.round($("chart-wrap").clientWidth));
+    const H = 240, padL = 30, padB = 26, padT = 22;   // taller on wider screens
+    svg.setAttribute("height", H);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);       // drawn at the real width, so text is never stretched
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
     const plotW = W - padL - 10, plotH = H - padT - padB;
-    const niceMax = Math.ceil(Math.max(1, ...days.map(d => d.count)) / 5) * 5 || 5;
-    const n = days.length, bandW = plotW / n, barW = Math.min(24, bandW * 0.55), baseY = padT + plotH;
+    const niceMax = Math.ceil(Math.max(1, ...days.map(d => d.count)) / 4) * 4 || 4;
+    const n = days.length, bandW = plotW / n, barW = Math.min(72, bandW * 0.62), baseY = padT + plotH;
     let bars = "", labels = "", axis = "", hits = "";
     days.forEach((d, i) => {
       const cx = padL + bandW * i + bandW / 2;
       const h = Math.max((d.count / niceMax) * plotH, d.count > 0 ? 1 : 0);
-      if (h > 0) bars += rectPath(cx - barW / 2, baseY - h, barW, h, 4, CHART_COLOR);
-      if (d.count > 0) labels += `<text x="${cx}" y="${Math.max(baseY - h - 6, padT - 8)}" text-anchor="middle" font-size="10" fill="#9299a8" font-family="${mono}">${d.count}</text>`;
+      if (h > 0) bars += rectPath(cx - barW / 2, baseY - h, barW, h, 4, chartColor());
+      if (d.count > 0) labels += `<text x="${cx}" y="${Math.max(baseY - h - 6, padT - 8)}" text-anchor="middle" font-size="10" fill="${ui.color("--muted")}" font-family="${mono}">${d.count}</text>`;
       hits += `<rect class="hit" data-idx="${i}" x="${padL + bandW * i}" y="${padT}" width="${bandW}" height="${plotH}" fill="transparent" style="cursor:pointer" />`;
       if (i % 2 === 0 || n <= 10) {
         const label = new Date(d.date + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" });
-        axis += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="#6b7280" font-family="${mono}">${label}</text>`;
+        axis += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="${ui.color("--muted")}" font-family="${mono}">${label}</text>`;
       }
     });
     svg.innerHTML = gridLines(W, padL, padT, plotH, niceMax) + bars + labels + axis + hits;
@@ -468,24 +571,28 @@
         tooltip.style.top = `${e.clientY - r.top - 10}px`;
         tooltip.style.opacity = "1";
         const label = new Date(d.date + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-        tooltip.innerHTML = `<div class="t-date">${label}</div><div class="t-row"><span class="t-dot" style="background:${CHART_COLOR}"></span>Orders: ${d.count}</div>`;
+        tooltip.innerHTML = `<div class="t-date">${label}</div><div class="t-row"><span class="t-dot" style="background:${chartColor()}"></span>Orders: ${d.count}</div>`;
       });
       hit.addEventListener("mouseleave", () => { tooltip.style.opacity = "0"; });
     });
   }
 
   function drawClientBars(svg, data) {
-    const W = 520, H = 220, padL = 34, padB = 30, padT = 22;
+    const W = Math.max(320, Math.round(svg.parentElement.clientWidth));
+    const H = 240, padL = 34, padB = 30, padT = 22;
+    svg.setAttribute("height", H);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
     const plotW = W - padL - 10, plotH = H - padT - padB;
-    const niceMax = Math.ceil(Math.max(1, ...data.map(d => d.count)) / 5) * 5 || 5;
-    const n = Math.max(data.length, 1), bandW = plotW / n, barW = Math.min(48, bandW * 0.5), baseY = padT + plotH;
+    const niceMax = Math.ceil(Math.max(1, ...data.map(d => d.count)) / 4) * 4 || 4;
+    const n = Math.max(data.length, 1), bandW = plotW / n, barW = Math.min(110, bandW * 0.55), baseY = padT + plotH;
     let bars = "", labels = "", axis = "";
     data.forEach((d, i) => {
       const cx = padL + bandW * i + bandW / 2;
       const h = Math.max((d.count / niceMax) * plotH, d.count > 0 ? 1 : 0);
       if (h > 0) bars += rectPath(cx - barW / 2, baseY - h, barW, h, 4, d.color);
-      if (d.count > 0) labels += `<text x="${cx}" y="${Math.max(baseY - h - 6, padT - 8)}" text-anchor="middle" font-size="10" fill="#9299a8" font-family="${mono}">${d.count}</text>`;
-      axis += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="10" fill="#9299a8" font-family="${mono}">${esc(truncate(d.client_name, 10))}</text>`;
+      if (d.count > 0) labels += `<text x="${cx}" y="${Math.max(baseY - h - 6, padT - 8)}" text-anchor="middle" font-size="10" fill="${ui.color("--muted")}" font-family="${mono}">${d.count}</text>`;
+      axis += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="10" fill="${ui.color("--muted")}" font-family="${mono}">${esc(truncate(d.client_name, 10))}</text>`;
     });
     svg.innerHTML = gridLines(W, padL, padT, plotH, niceMax) + bars + labels + axis;
   }
@@ -660,6 +767,13 @@
     fillDashboardFilters();
     await Promise.all([loadStats(), loadClientBars(), loadClientPie(), refreshSummary()]);
   }
+  // the charts are drawn at the width of their card: draw them again when the window changes size
+  window.addEventListener("resize", debounce(() => {
+    if ($("tab-dashboard").classList.contains("active")) loadDashboardTab().catch(() => {});
+  }, 400));
+  document.addEventListener("themechange", () => {
+    if ($("tab-dashboard").classList.contains("active")) loadDashboardTab().catch(() => {});
+  });
   // keep the numbers fresh while the Dashboard is on screen (jobs finish in the background)
   setInterval(() => {
     if (document.hidden || !$("tab-dashboard").classList.contains("active")) return;
@@ -693,7 +807,7 @@
       resetUserForm();
       await loadDashboardTab();
     } catch (e) {
-      alert(e.message);
+      ui.toast(e.message, "error");
     } finally {
       $("page-loader").classList.add("hidden");
     }

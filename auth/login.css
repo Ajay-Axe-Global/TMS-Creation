@@ -1,0 +1,57 @@
+/* Sign-in page. Tokens, inputs and buttons come from /static/css/theme.css. */
+
+body { min-height: 100vh; }
+
+.login-theme { position: fixed; top: 16px; right: 16px; z-index: 5; background: var(--surface); }
+
+.login-wrap {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+  background:
+    radial-gradient(900px 420px at 15% -10%, var(--accent-soft), transparent 70%),
+    radial-gradient(700px 380px at 100% 110%, rgba(124, 58, 237, .08), transparent 70%),
+    var(--bg);
+}
+
+.login-card {
+  width: 100%; max-width: 400px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-pop); padding: 32px 30px 24px;
+  animation: ui-rise 240ms ease;
+}
+
+.brand { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 22px; }
+.logo-mark {
+  width: 44px; height: 44px; border-radius: 12px; margin-bottom: 12px; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 16px var(--accent-ring);
+}
+.logo-mark svg { width: 22px; height: 22px; }
+.wordmark { font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+.tagline { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.form-header { font-size: 13px; font-weight: 600; margin-bottom: 4px; text-align: center; color: var(--muted); }
+
+.field { margin-top: 4px; }
+.input-wrap { position: relative; }
+.input-wrap > svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; color: var(--muted); pointer-events: none; }
+.input-wrap input { padding: 11px 12px 11px 38px; font-size: 14px; }
+.input-wrap input.has-toggle { padding-right: 42px; }
+.password-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 30px; height: 30px; border: none; background: transparent; color: var(--muted); border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; transition: color var(--ease);
+}
+.password-toggle:hover { color: var(--text); }
+.password-toggle svg { width: 16px; height: 16px; }
+
+#error {
+  display: none; margin: 14px 0 4px; padding: 9px 12px; border-radius: 8px; font-size: 12.5px;
+  background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(220, 38, 38, .25);
+}
+
+#submit-btn { width: 100%; margin-top: 20px; padding: 11px; font-size: 14px; }
+.btn-spinner { display: none; width: 15px; height: 15px; border: 2px solid rgba(255, 255, 255, .4); border-top-color: #fff; border-radius: 50%; animation: ui-spin .7s linear infinite; }
+#submit-btn.loading .btn-text { opacity: .8; }
+#submit-btn.loading .btn-spinner { display: inline-block; }
+
+.footer { margin-top: 20px; text-align: center; font-size: 12px; color: var(--muted); }

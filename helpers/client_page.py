@@ -20,7 +20,8 @@ from flask import Blueprint, abort, current_app, g, jsonify, render_template, re
 from database.db import SessionLocal
 from database.models import Client, Shipment, TmsCredential
 from database import source_sync
-from helpers import jobs, shipment_files, tms_worker
+from helpers import carriers as carrier_svc
+from helpers import jobs, shipment_files, tms_worker, tradelanes
 from helpers.audit import audit
 from helpers.convert import json_number as _n, iso as _d, slugify
 from helpers.decorators import client_access_required
@@ -90,6 +91,7 @@ def make_blueprint(flow_slug: str) -> Blueprint:
             events = jobs.latest_events(session, [j.id for j in latest_job.values()
                                                   if j.status in jobs.ACTIVE])
             me_id = g.user["user_id"]
+            code_of = carrier_svc.matcher(session)
             cred = session.query(TmsCredential).filter_by(user_id=me_id).first()
 
             def activity(s):
@@ -111,7 +113,7 @@ def make_blueprint(flow_slug: str) -> Blueprint:
                     "client_ref": s.client_ref,
                     "carrier": s.carrier,
                     "customer_no": client.tms_customer_no,
-                    "tradelane_no": client.tms_tradelane_no,
+                    "tradelane_no": tradelanes.lane_for(client, code_of(s.carrier)),
                     "remarks": s.remarks,
                     "vessel_name": s.vessel_name,
                     "ata_date": _d(s.depot_out_from),     # the source's ata_date is stored as depot_out_from

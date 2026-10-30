@@ -99,3 +99,14 @@ def tms_date(iso_date: str | None) -> str:
         return ""
     d = datetime.date.fromisoformat(iso_date)
     return f"{d.day}/{d.month:02d}/{d.year}"
+
+
+def date_time(iso_date: str | None, time: str = "") -> str:
+    """"2026-11-25", "10:00" -> "25/11/2026 10:00"; just the date when no time is given, "" when there is no date."""
+    d = tms_date(iso_date)
+    return f"{d} {time}" if d and time else d
+
+
+def join(separator: str, *parts) -> str:
+    """The parts that have a value, joined: join("/", "EMV-2026345", "", "718990") -> "EMV-2026345/718990"."""
+    return separator.join(str(p) for p in parts if p not in (None, ""))

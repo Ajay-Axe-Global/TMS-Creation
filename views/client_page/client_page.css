@@ -1,0 +1,199 @@
+/* Client page (one customer at one warehouse). Colours, buttons, inputs, pills and modals come from
+   /static/css/theme.css; this file is the page layout and the shipment table. */
+
+/* ── top bar ─────────────────────────────────────────────────────────────── */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px clamp(16px, 3vw, 32px);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .logo {
+  width: 28px; height: 28px; border-radius: 8px; color: #fff; font-size: 13px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+#user-name { font-size: 13px; font-weight: 500; }
+
+.tracking-container { width: 100%; margin: 0 auto; padding: 24px clamp(16px, 3vw, 32px) 64px; }
+
+.back-link {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted);
+  margin-bottom: 12px; transition: color var(--ease);
+}
+.back-link:hover { color: var(--text); text-decoration: none; }
+
+.page-header { margin-bottom: 18px; }
+.page-header h1 { font-size: 22px; font-weight: 700; letter-spacing: -.01em; margin-bottom: 4px; }
+.page-header p { font-size: 12.5px; color: var(--muted); max-width: 920px; }
+
+/* ── notices ─────────────────────────────────────────────────────────────── */
+.notice {
+  display: none; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; line-height: 1.5;
+  border: 1px solid transparent;
+}
+.notice.show { display: block; }
+.notice.ok { background: var(--success-soft); color: var(--success); border-color: rgba(22, 163, 74, .25); }
+.notice.warn { background: var(--warning-soft); color: var(--warning); border-color: rgba(217, 119, 6, .25); }
+.notice.err { background: var(--danger-soft); color: var(--danger); border-color: rgba(220, 38, 38, .25); }
+.notice.info { background: var(--accent-soft); color: var(--accent); border-color: rgba(37, 99, 235, .2); }
+.notice ul { margin: 6px 0 0 18px; }
+.notice strong { font-weight: 700; }
+
+/* ── toolbar: search + month filter left, counts + Sync + Create right ───── */
+.table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+.toolbar-left { display: flex; align-items: center; gap: 10px; flex: 1; flex-wrap: wrap; min-width: 0; }
+.search-wrap { position: relative; flex: 1 1 260px; min-width: 220px; max-width: 380px; }
+.search-wrap .search-icon {
+  position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+  width: 15px; height: 15px; color: var(--muted); pointer-events: none;
+}
+#search-input { padding-left: 33px; background: var(--surface); }
+.toolbar-left select { width: auto; background-color: var(--surface); }
+.toolbar-left select:disabled { opacity: .45; cursor: default; }
+.toolbar-actions { display: flex; gap: 10px; align-items: center; }
+.counts { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+#create-btn { padding: 8px 22px; font-size: 13px; }
+#sync-btn { padding: 8px 16px; font-size: 13px; }
+#sync-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+#sync-btn:disabled { opacity: .5; cursor: progress; }
+
+/* ── the table ───────────────────────────────────────────────────────────── */
+.tracking-table-wrap {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card); overflow-x: auto;
+}
+/* Wider than the screen once all columns are there: the wrap scrolls sideways and Status stays pinned on the right. */
+table.tracking-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 13px; }
+table.tracking-table th { padding: 11px 14px; background: var(--surface-2); }
+table.tracking-table td { padding: 11px 14px; vertical-align: middle; }
+table.tracking-table tr:last-child td { border-bottom: none; }
+table.tracking-table tbody tr:hover td { background: var(--hover-tint); }
+table.tracking-table tr.selected td { background: var(--accent-soft); }
+table.tracking-table td.mono { font-family: var(--mono); font-size: 12.5px; }
+table.tracking-table td.num-cell { color: var(--muted); font-family: var(--mono); }
+.empty-cell { color: var(--muted); opacity: .55; }
+.row-checkbox, .select-all-checkbox { width: 15px; height: 15px; cursor: pointer; }
+.row-checkbox:disabled { cursor: not-allowed; opacity: .35; }
+
+/* An ITOS number's containers sit together: the group's first row carries a stronger divider, and its continuation rows
+   dim the shipment-level cells (still in the DOM for search and the narrow-screen card layout). */
+table.tracking-table tr.group-start td { border-top: 2px solid var(--border); }
+table.tracking-table tr.group-start:first-child td { border-top: none; }
+table.tracking-table td.count-cell { font-family: var(--mono); text-align: center; }
+.expander {
+  display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  transition: border-color var(--ease), color var(--ease);
+}
+.expander:hover { border-color: var(--accent); color: var(--accent); }
+.expander svg { transition: transform var(--ease); }
+.expander.open svg { transform: rotate(180deg); }
+table.tracking-table tr.cont td.ship { color: var(--border); }
+table.tracking-table tr.cont td.ship .empty-cell { color: var(--border); }
+
+/* Status is locked: it stays visible on the right while the other columns scroll underneath it. */
+table.tracking-table th.status-col, table.tracking-table td.status-col {
+  position: sticky; right: 0; z-index: 2; min-width: 170px; box-shadow: -8px 0 10px -8px rgba(16, 24, 40, .18);
+}
+table.tracking-table td.status-col { background: var(--surface); }
+table.tracking-table th.status-col { background: var(--surface-2); z-index: 3; }
+table.tracking-table tr:hover td.status-col { background: var(--surface); }
+table.tracking-table tr.selected td.status-col { background: var(--surface); }
+table.tracking-table td.nowrap { white-space: nowrap; }
+table.tracking-table td.pending-no { color: var(--accent); font-style: italic; }
+table.tracking-table td.num { text-align: right; font-family: var(--mono); }
+table.tracking-table th.num { text-align: right; }
+
+/* ── Files cell: one button that opens the attach panel, plus a chip per document type ── */
+.attach-btn {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 150px; background: transparent;
+  border: 1px dashed var(--border); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 12px; color: var(--muted);
+  cursor: pointer; transition: border-color var(--ease), color var(--ease);
+}
+.attach-btn:hover { border-color: var(--accent); color: var(--accent); }
+.attach-btn.has-files { border-style: solid; color: var(--text); }
+.ftype {
+  display: inline-flex; gap: 4px; align-items: center; background: var(--accent-soft); color: var(--accent);
+  border-radius: 999px; padding: 1px 8px; font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+}
+.ftype b { color: inherit; }
+.ftype.missing { background: var(--danger-soft); color: var(--danger); }
+
+/* ── attach panel (a modal): one drop box per document type ─────────────── */
+.attach-overlay { align-items: center; z-index: 110; padding: 20px; }
+.attach-panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-modal); box-shadow: var(--shadow-pop);
+  padding: 20px 22px; width: 100%; max-width: 980px; max-height: 90vh; display: flex; flex-direction: column;
+  animation: ui-rise 200ms ease;
+}
+.attach-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+.attach-title { font-size: 15px; font-weight: 700; }
+.attach-sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.attach-error { display: none; margin-bottom: 12px; }
+.attach-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; overflow-y: auto; }
+.attach-type { display: flex; flex-direction: column; min-height: 220px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.attach-type h3 {
+  margin: 0; padding: 10px 14px; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted);
+  border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;
+}
+.attach-type h3 span { font-weight: 600; }
+.attach-zone {
+  flex: 1; margin: 10px; border: 1px dashed var(--border); border-radius: 9px; padding: 10px; display: flex; flex-direction: column;
+  gap: 6px; color: var(--muted); font-size: 12px; background: var(--surface); transition: border-color var(--ease), background var(--ease);
+}
+.attach-zone.editable { cursor: pointer; }
+.attach-zone.editable:hover { border-color: var(--accent); }
+.attach-zone.drag-over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.attach-zone.uploading { opacity: .55; pointer-events: none; }
+.attach-hint { text-align: center; margin: auto 0; line-height: 1.6; }
+.afile { display: flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; }
+.afile .aname {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: none; border: none;
+  font: inherit; color: var(--text); text-align: left; cursor: pointer; padding: 0;
+}
+.afile .aname:hover { color: var(--accent); text-decoration: underline; }
+.afile .asize { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.afile .ax { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; }
+.afile .ax:hover { color: var(--danger); }
+.afile.missing .aname { color: var(--danger); }
+
+/* ── status cell: a pill, never plain text ──────────────────────────────── */
+.status-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .3px; white-space: nowrap; background: var(--surface-2); color: var(--muted);
+}
+.status-badge.queued, .status-badge.running { background: var(--accent-soft); color: var(--accent); }
+.status-badge.running { animation: pulse 1.4s ease-in-out infinite; }
+.status-badge.done { background: var(--success-soft); color: var(--success); }
+.status-badge.dry_run { background: var(--success-soft); color: var(--success); }
+.status-badge.failed { background: var(--danger-soft); color: var(--danger); }
+.status-badge.needs_relogin { background: var(--warning-soft); color: var(--warning); }
+@keyframes pulse { 50% { opacity: .55; } }
+.status-note { font-size: 11px; margin-top: 4px; color: var(--muted); max-width: 260px; line-height: 1.4; }
+.status-note.err { color: var(--danger); }
+
+.tracking-empty { text-align: center; padding: 48px 24px; color: var(--muted); font-size: 13px; }
+.tracking-error {
+  text-align: center; padding: 36px 24px; color: var(--danger); font-size: 13.5px;
+  background: var(--danger-soft); border: 1px solid rgba(220, 38, 38, .25); border-radius: var(--radius-card);
+}
+
+/* ── card layout on narrow screens ───────────────────────────────────────── */
+@media (max-width: 640px) {
+  .header-right #user-name { display: none; }
+  table.tracking-table thead { display: none; }
+  table.tracking-table, table.tracking-table tbody, table.tracking-table tr, table.tracking-table td { display: block; width: 100%; }
+  table.tracking-table tr { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  table.tracking-table td { border-bottom: none; padding: 5px 0; display: flex; justify-content: space-between; align-items: center; }
+  table.tracking-table td::before {
+    content: attr(data-label); color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; font-weight: 700;
+  }
+  table.tracking-table td.blank { display: none; }
+  table.tracking-table th.status-col, table.tracking-table td.status-col { position: static; box-shadow: none; min-width: 0; }
+  table.tracking-table { width: 100%; }
+  table.tracking-table tr.cont td.ship { color: var(--text); }
+}

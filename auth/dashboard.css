@@ -1,0 +1,33 @@
+/* Client chooser (the landing page of a normal user). Tokens and components come from /static/css/theme.css. */
+
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px clamp(16px, 3vw, 32px);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .logo {
+  width: 28px; height: 28px; border-radius: 8px; color: #fff; font-size: 13px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.brand-name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+#user-name { font-size: 13px; font-weight: 500; }
+
+main { max-width: 1040px; margin: 0 auto; padding: 36px clamp(16px, 3vw, 24px) 64px; }
+.sub { font-size: 13px; color: var(--muted); margin: 4px 0 22px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+a.card {
+  display: flex; align-items: center; gap: 14px; padding: 16px 18px; color: var(--text); text-decoration: none;
+  transition: border-color var(--ease), transform var(--ease), box-shadow var(--ease);
+}
+a.card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: var(--shadow-pop); text-decoration: none; }
+a.card .avatar { width: 38px; height: 38px; font-size: 15px; border-radius: 10px; }
+a.card .client { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+a.card .go { color: var(--muted); font-size: 18px; transition: color var(--ease), transform var(--ease); }
+a.card:hover .go { color: var(--accent); transform: translateX(2px); }
+
+@media (max-width: 640px) { .header-right #user-name { display: none; } }
