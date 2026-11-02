@@ -97,12 +97,30 @@ table.tracking-table tr.cont td.ship .empty-cell { color: var(--border); }
 
 /* Status is locked: it stays visible on the right while the other columns scroll underneath it. */
 table.tracking-table th.status-col, table.tracking-table td.status-col {
-  position: sticky; right: 0; z-index: 2; min-width: 170px; box-shadow: -8px 0 10px -8px rgba(16, 24, 40, .18);
+  position: sticky; right: 64px; z-index: 2; min-width: 170px; box-shadow: -8px 0 10px -8px rgba(16, 24, 40, .18);
 }
 table.tracking-table td.status-col { background: var(--surface); }
 table.tracking-table th.status-col { background: var(--surface-2); z-index: 3; }
 table.tracking-table tr:hover td.status-col { background: var(--surface); }
 table.tracking-table tr.selected td.status-col { background: var(--surface); }
+
+/* Video is the last column and stays pinned at the far right, next to Status. */
+table.tracking-table th.video-col, table.tracking-table td.video-col {
+  position: sticky; right: 0; z-index: 2; width: 64px; min-width: 64px; max-width: 64px; text-align: center;
+}
+table.tracking-table td.video-col { background: var(--surface); }
+table.tracking-table th.video-col { background: var(--surface-2); z-index: 3; }
+table.tracking-table tr:hover td.video-col, table.tracking-table tr.selected td.video-col { background: var(--surface); }
+.video-btn {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+  border-radius: 50%; border: 1px solid var(--border); background: var(--accent-soft); color: var(--accent); cursor: pointer;
+  transition: border-color var(--ease), background var(--ease);
+}
+.video-btn:hover { border-color: var(--accent); background: var(--surface); }
+.video-btn .video-n {
+  position: absolute; top: -5px; right: -5px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 9.5px; font-weight: 700; line-height: 15px; text-align: center;
+}
 table.tracking-table td.nowrap { white-space: nowrap; }
 table.tracking-table td.pending-no { color: var(--accent); font-style: italic; }
 table.tracking-table td.num { text-align: right; font-family: var(--mono); }
@@ -194,6 +212,7 @@ table.tracking-table th.num { text-align: right; }
   }
   table.tracking-table td.blank { display: none; }
   table.tracking-table th.status-col, table.tracking-table td.status-col { position: static; box-shadow: none; min-width: 0; }
+  table.tracking-table th.video-col, table.tracking-table td.video-col { position: static; width: 100%; max-width: none; text-align: right; }
   table.tracking-table { width: 100%; }
   table.tracking-table tr.cont td.ship { color: var(--text); }
 }

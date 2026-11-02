@@ -71,6 +71,8 @@ def create_app() -> Flask:
         start_workers()   # TMS_WORKERS browsers (0 = none); see helpers/tms_worker.py
         from database.source_sync import start_scheduler
         start_scheduler()  # only if SYNC_INTERVAL_MINUTES > 0
+        from helpers.job_video import start_cleanup
+        start_cleanup()    # deletes expired job videos (24 h after a successful run); see helpers/job_video.py
 
     @app.after_request
     def no_store(resp):

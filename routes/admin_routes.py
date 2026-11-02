@@ -1,10 +1,12 @@
 from functools import wraps
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, abort, g, jsonify, request, send_file
 
 from admin import dashboard, service
 from database import source_sync
 from database.db import SessionLocal
+from database.models import JobVideo
+from helpers import job_video
 from helpers.audit import audit
 from helpers.decorators import role_required
 
@@ -167,6 +169,49 @@ def sync_last(session, actor):
 @api
 def audit_list(session, actor):
     return service.list_audit(session)
+
+
+# Job videos (helpers/job_video.py): list, watch, delete one, delete the expired ones now
+@bp.route("/videos", methods=["GET"])
+@api
+def videos_list(session, actor):
+    return job_video.admin_list(session)
+
+
+@bp.route("/videos/<int:video_id>/file", methods=["GET"])
+@role_required("admin")
+def videos_file(video_id):
+    session = SessionLocal()
+    try:
+        v = session.get(JobVideo, video_id)
+        if v is None or v.status != "ready" or not job_video.exists(v):
+            abort(404)
+        return send_file(job_video.absolute_path(v), mimetype="video/webm", conditional=True)
+    finally:
+        session.close()
+
+
+@bp.route("/videos/<int:video_id>", methods=["DELETE"])
+@api
+def videos_delete(session, actor, video_id):
+    v = session.get(JobVideo, video_id)
+    if v is None:
+        raise service.ServiceError("That video no longer exists.", 404)
+    target = f"video {v.id} (job {v.job_id})"
+    if not job_video.remove(session, v):
+        raise service.ServiceError("The file is in use right now — try again in a moment.", 409)
+    audit(session, actor, "video_delete", target, None)
+    session.commit()
+    return {"deleted": 1}
+
+
+@bp.route("/videos/expired", methods=["DELETE"])
+@api
+def videos_delete_expired(session, actor):
+    n = job_video.cleanup(session)
+    audit(session, actor, "video_cleanup", None, f"{n} expired video(s) deleted")
+    session.commit()
+    return {"deleted": n}
 
 
 # Dashboard — who created which orders (see admin/dashboard.py for what is counted)

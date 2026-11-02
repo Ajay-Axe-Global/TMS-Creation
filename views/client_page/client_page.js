@@ -118,6 +118,30 @@
     return `<td class="status-col" data-label="Status"><span class="status-badge ${s.tms_status}">${esc(STATUS_LABEL[s.tms_status] || s.tms_status)}</span>${note}</td>`;
   }
 
+  // The screen recording(s) of this shipment's runs: a play icon (a retried shipment has one per run, picked in the player).
+  function videoCell(s) {
+    const n = (s.videos || []).length;
+    if (!n) return `<td class="video-col" data-label="Video"><span class="empty-cell">—</span></td>`;
+    return `<td class="video-col" data-label="Video"><button type="button" class="video-btn" data-video="${s.id}"
+      title="Watch what the browser did for ${esc(s.itos_no)}" aria-label="Watch the recording of ${esc(s.itos_no)}">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>${n > 1 ? `<span class="video-n">${n}</span>` : ""}</button></td>`;
+  }
+
+  function openVideo(sid) {
+    const s = shipments.find(x => x.id === sid);
+    if (!s || !(s.videos || []).length) return;
+    const when = iso => iso ? new Date(iso + "Z").toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    const last = s.videos[s.videos.length - 1];
+    VideoPlayer.open({
+      title: `Recording — ${s.itos_no}`,
+      sub: last.expires_at ? `Deleted automatically on ${when(last.expires_at)}` : "Kept until an administrator deletes it",
+      items: s.videos.map((v, i) => ({
+        label: `Run ${i + 1} · ${when(v.created_at)} · ${fmtSize(v.size)}${v.cut_short ? " · cut short" : ""}${v.part > 1 ? ` · page ${v.part}` : ""}`,
+        url: `${base}/shipments/${s.id}/videos/${v.id}`,
+      })),
+    });
+  }
+
   function render() {
     renderMonthBar();
     const shown = filtered();
@@ -173,6 +197,7 @@
           ${cell("Weight", c && c.gross_weight, "num")}
           ${cell("Remarks", per(c, s, "remarks"), cls(c, "remarks", "nowrap"))}
           ${first ? statusCell(s) : '<td class="status-col blank" data-label="Status"></td>'}
+          ${first ? videoCell(s) : '<td class="video-col blank" data-label="Video"></td>'}
         </tr>`;
       }).join("");
     }).join("");
@@ -404,7 +429,9 @@
   $("rows").addEventListener("click", e => {
     const at = e.target.closest("[data-attach]");
     const tg = e.target.closest("[data-toggle]");
-    if (at) openAttach(+at.dataset.attach);
+    const vd = e.target.closest("[data-video]");
+    if (vd) openVideo(+vd.dataset.video);
+    else if (at) openAttach(+at.dataset.attach);
     else if (tg) {
       const id = +tg.dataset.toggle;
       if (expanded.has(id)) expanded.delete(id); else expanded.add(id);

@@ -26,6 +26,7 @@
         <button class="tab-btn" data-tab="users">Users</button>
         <button class="tab-btn" data-tab="clients">Clients</button>
         <button class="tab-btn" data-tab="addresses">Carriers &amp; Addresses</button>
+        <button class="tab-btn" data-tab="videos">Videos</button>
         <button class="tab-btn" data-tab="audit">Audit log</button>
       </div>
       <button class="theme-toggle" id="theme-btn"></button>
@@ -410,6 +411,36 @@
       </div>
     </div>
 
+    <!-- ═══════════════════ VIDEOS TAB ═══════════════════ -->
+    <div class="tab-panel" id="tab-videos">
+      <div class="panel full">
+        <h2 style="margin-bottom:6px">Job videos</h2>
+        <p class="panel-sub">The browser recording of every run. A run that created its TMS order(s) is deleted by itself after 24 hours; failed, partial and
+          created-with-warnings runs stay here until you delete them.</p>
+        <div style="display:flex; gap:12px; align-items:center; margin-bottom:14px; flex-wrap:wrap">
+          <span id="videos-summary" class="panel-sub" style="margin:0"></span>
+          <button class="primary secondary" id="videos-expired-btn">Delete expired now</button>
+        </div>
+        <div class="table-scroll">
+          <table id="videos-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Client</th>
+                <th>ITOS</th>
+                <th>User</th>
+                <th>Result</th>
+                <th>Size</th>
+                <th>Deleted</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- ═══════════════════ AUDIT TAB ═══════════════════ -->
     <div class="tab-panel" id="tab-audit">
       <div class="panel full">
@@ -463,6 +494,7 @@
   </div>
 
   <script src="/auth/client.js"></script>
+  <script src="/static/js/video_player.js"></script>
   <script src="/admin/admin.js"></script>
 </body>
 

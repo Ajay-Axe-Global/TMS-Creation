@@ -26,7 +26,7 @@
   // ═══════════════════════════════════════════════════════════════════
   // Tabs
   // ═══════════════════════════════════════════════════════════════════
-  const loaders = { dashboard: loadDashboardTab, users: loadUsersTab, clients: loadClientsTab, addresses: loadAddressesTab, audit: loadAuditTab };
+  const loaders = { dashboard: loadDashboardTab, users: loadUsersTab, clients: loadClientsTab, addresses: loadAddressesTab, videos: loadVideosTab, audit: loadAuditTab };
 
   document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -779,6 +779,64 @@
     if (document.hidden || !$("tab-dashboard").classList.contains("active")) return;
     Promise.all([loadStats(), loadClientBars(), loadClientPie(), refreshSummary()]).catch(() => {});
   }, 30000);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Videos tab — the browser recording of each run (helpers/job_video.py)
+  // ═══════════════════════════════════════════════════════════════════
+  let videosCache = [];
+  const fmtBytes = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
+  const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  const utc = iso => iso ? iso + "Z" : iso;
+
+  async function loadVideosTab() {
+    const data = await api("/api/admin/videos");
+    videosCache = data.videos;
+    $("videos-summary").textContent = `${videosCache.length} video${videosCache.length === 1 ? "" : "s"} · ${fmtBytes(data.total_size)} on disk`;
+    document.querySelector("#videos-table tbody").innerHTML = videosCache.length ? videosCache.map(v => {
+      const ok = v.job_status === "done";
+      const result = v.status === "recording" ? badge("recording…")
+        : `${badge(v.job_status.replace("_", " "), ok ? "status-done" : "status-failed")}${v.cut_short ? " " + badge("cut short", "inactive") : ""}`;
+      const when = v.status === "recording" ? "—" : v.missing ? "file missing"
+        : v.expires_at ? fmtTimestamp(utc(v.expires_at)) : "by hand";
+      return `<tr>
+        <td class="mono">${esc(fmtTimestamp(utc(v.created_at)))}</td>
+        <td>${esc(v.client || "—")}</td>
+        <td class="mono">${esc(v.itos_no || "—")}${v.part > 1 ? ` <span class="panel-sub" style="margin:0">page ${v.part}</span>` : ""}</td>
+        <td>${esc(v.user || "—")}</td>
+        <td title="${esc(v.message || "")}">${result}</td>
+        <td class="mono">${v.status === "ready" ? esc(fmtBytes(v.size)) : "—"}</td>
+        <td class="mono">${esc(when)}</td>
+        <td class="actions">
+          ${v.status === "ready" && !v.missing ? `<button class="icon" title="Watch" aria-label="Watch" data-watch-video="${v.id}">${ICON_PLAY}</button>` : ""}
+          ${v.status === "ready" ? `<button class="icon danger" title="Delete" aria-label="Delete" data-delete-video="${v.id}">${ICON_DELETE}</button>` : ""}
+        </td>
+      </tr>`;
+    }).join("") : emptyRow(8, "No videos yet.");
+
+    document.querySelectorAll("[data-watch-video]").forEach(b => b.addEventListener("click", () => {
+      const v = videosCache.find(x => x.id === +b.dataset.watchVideo);
+      VideoPlayer.open({
+        title: `Recording — ${v.itos_no || "job " + v.job_id}`,
+        sub: `${v.client || ""} · ${v.user || ""} · ${v.job_status.replace("_", " ")}${v.cut_short ? " · cut short" : ""}`,
+        items: [{ label: "Run", url: `/api/admin/videos/${v.id}/file` }],
+      });
+    }));
+    document.querySelectorAll("[data-delete-video]").forEach(b => b.addEventListener("click", async () => {
+      const v = videosCache.find(x => x.id === +b.dataset.deleteVideo);
+      if (!await ui.confirm({ title: "Delete this video?", danger: true, confirmText: "Delete",
+        text: `${v.itos_no || "Job " + v.job_id} (${v.client || "—"}). This cannot be undone.` })) return;
+      try { await api(`/api/admin/videos/${v.id}`, { method: "DELETE" }); await loadVideosTab(); }
+      catch (e) { ui.toast(e.message, "error"); }
+    }));
+  }
+
+  $("videos-expired-btn").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/admin/videos/expired", { method: "DELETE" });
+      ui.toast(r.deleted ? `Deleted ${r.deleted} expired video${r.deleted === 1 ? "" : "s"}.` : "Nothing has expired.", "success");
+      await loadVideosTab();
+    } catch (e) { ui.toast(e.message, "error"); }
+  });
 
   // ═══════════════════════════════════════════════════════════════════
   // Audit tab

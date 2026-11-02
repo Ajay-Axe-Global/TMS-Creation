@@ -10,7 +10,7 @@ Layout
   Client ──< Shipment ──< ShipmentContainer     one shipment per ITOS number
   Shipment ──1 ShipmentFile                     the one document dropped on its row (the TMS attachment)
   DepotAddress                                  depot name (as in the source) -> TMS address no., one list for all
-  Shipment ──< TmsJob ──< JobLog / JobArtifact
+  Shipment ──< TmsJob ──< JobLog / JobArtifact / JobVideo
 """
 import datetime
 
@@ -338,6 +338,27 @@ class TmsJob(Base):
     logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan",
                         order_by="JobLog.seq")
     artifacts = relationship("JobArtifact", back_populates="job", cascade="all, delete-orphan")
+    videos = relationship("JobVideo", back_populates="job", cascade="all, delete-orphan", order_by="JobVideo.id")
+
+
+class JobVideo(Base):
+    """The screen recording of one run of a job (helpers/job_video.py). One row per recorded page; a retry makes new rows.
+    status "recording" = the run is still going (or was cut off and not yet closed out); "ready" = a file you can play."""
+    __tablename__ = "job_videos"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("tms_jobs.id"), nullable=False, index=True)
+    attempt = Column(Integer, nullable=False, default=1)       # the job's attempt number, for display only
+    part = Column(Integer, nullable=False, default=1)          # 2+ = a second page (pop-up) of the same run
+    path = Column(String(500), nullable=True)                  # relative to uploads/
+    status = Column(String(12), nullable=False, default="recording")   # recording | ready
+    cut_short = Column(Boolean, nullable=False, default=False)         # the run was cut off (server restart)
+    size = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)               # NULL = kept until an administrator deletes it
+
+    job = relationship("TmsJob", back_populates="videos")
 
 
 class JobLog(Base):
