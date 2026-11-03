@@ -7,6 +7,7 @@
   let shipments = [];
   let me = { tms_login: true };
   let createEnabled = false;
+  let flowReady = true;       // false = no clients/<customer>/ file yet: view and sync only
   const selected = new Set();
   // Shipments whose container rows are open. A shipment you opened stays open and one you closed stays closed
   // through every refresh and reload (kept in this browser, per client); the default is closed.
@@ -215,7 +216,8 @@
     all.checked = selectable.length > 0 && picked === selectable.length;
     all.indeterminate = picked > 0 && picked < selectable.length;
     all.disabled = selectable.length === 0;
-    $("create-btn").disabled = selected.size === 0 || !me.tms_login;
+    $("create-btn").disabled = selected.size === 0 || !me.tms_login || !flowReady;
+    $("create-btn").title = flowReady ? "" : "No TMS order flow for this customer yet";
     $("create-btn").textContent = selected.size ? `Create (${selected.size})` : "Create";
 
     // The phone call: the one moment the user must act, so it is never buried in a row.
@@ -226,7 +228,8 @@
       calling ? "📞 <strong>TMS is calling your phone</strong> — answer it and press <strong>#</strong>."
       : failedCall ? "📞 The call was not answered — trying again. Please answer and press <strong>#</strong>." : "");
 
-    if (!me.tms_login) notice($("notice"), "err", "No TMS login is set for your account — ask an administrator to add it before creating.");
+    if (!flowReady) notice($("notice"), "warn", "There is no TMS order flow for this customer yet, so you can view and sync its shipments but not create them. Ask an administrator.");
+    else if (!me.tms_login) notice($("notice"), "err", "No TMS login is set for your account — ask an administrator to add it before creating.");
 
     // Keep status fresh while anything is in flight.
     clearTimeout(pollTimer);
@@ -239,6 +242,7 @@
       shipments = data.shipments;
       me = data.me;
       createEnabled = data.create_enabled;
+      flowReady = data.flow_ready !== false;
       docTypes = data.doc_types || docTypes;
       render();
       if (attachSid) renderAttach();
@@ -459,6 +463,7 @@
       shipments = data.shipments;
       me = data.me;
       createEnabled = data.create_enabled;
+      flowReady = data.flow_ready !== false;
       docTypes = data.doc_types || docTypes;
       render();
     } catch (e) {

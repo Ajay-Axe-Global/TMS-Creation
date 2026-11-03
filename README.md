@@ -39,6 +39,9 @@ the goods-code table (`helpers/tms_codes.py`).
 
 For a customer that fills the same TMS fields as the existing ones.
 
+> A client added in Admin works straight away: its page opens, Sync loads its shipments, and users see the data. **Create**
+> stays disabled ("no TMS order flow yet") until steps 1 and 2 below are done.
+
 **1. Create the client file.** Copy `clients/emvia/` to `clients/<slug>/` and rename the file inside it:
 
 ```
