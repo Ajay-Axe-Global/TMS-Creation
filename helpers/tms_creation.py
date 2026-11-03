@@ -812,7 +812,13 @@ class Creation:
             self.step("Lines", ln["action"], cap, key, "Booked DateTime From", ln.get("bookedFrom"), settle=0.6,
                       extra=lambda v=val: "Until: " + v("Booked DateTime Until"))
             if ln.get("bookedUntil"):
-                self.step("Lines", ln["action"], cap, key, "Booked DateTime Until", ln["bookedUntil"], settle=0.6)
+                # TMS copies "From" into "Until" by itself; retype only when it did not (or the values differ)
+                cur = lambda: norm(self.cell_text(self.cell(cap, key, "Booked DateTime Until")))
+                if self.until(lambda: norm(ln["bookedUntil"]) in cur(), 1.0):
+                    self.L("Lines", Line=ln["action"], Field="Booked DateTime Until", Value=ln["bookedUntil"],
+                           Actual=cur(), Extra="filled by TMS", Status="OK")
+                else:
+                    self.step("Lines", ln["action"], cap, key, "Booked DateTime Until", ln["bookedUntil"], settle=0.6)
             self.step("Lines", ln["action"], cap, key, "Closing Date Time", ln.get("closing"))
         self.close_date_picker()
         self.blur_active()
@@ -841,6 +847,9 @@ class Creation:
         took = lambda: norm(value) in norm(shown())
         how = None
         try:
+            if which == "Until" and self.until(took, 1.0):        # TMS copied "From" into "Until" already
+                self.L("Lines", Line=line, Field=abbr, Value=value, Actual=shown(), Extra="filled by TMS", Status="OK")
+                return
             idx = self.col_idx(cap, abbr)
             if idx >= 0:
                 self.activate_row(cap, key, idx)
