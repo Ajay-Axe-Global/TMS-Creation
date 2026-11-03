@@ -22,7 +22,7 @@ from database.db import SessionLocal
 from database.models import Client, JobVideo, Shipment, TmsCredential, TmsJob
 from database import source_sync
 from helpers import carriers as carrier_svc
-from helpers import job_video, jobs, shipment_files, tms_worker, tradelanes
+from helpers import flows, job_video, jobs, shipment_files, tms_worker, tradelanes
 from helpers.audit import audit
 from helpers.convert import json_number as _n, iso as _d, slugify
 from helpers.decorators import client_access_required
@@ -47,13 +47,22 @@ def _container_values(c, s) -> dict:
     return out
 
 
-def make_blueprint(flow_slug: str) -> Blueprint:
-    bp = Blueprint(flow_slug, __name__, template_folder=str(VIEWS), url_prefix=f"/app/{flow_slug}")
+def make_blueprint(flow_slug: str | None = None) -> Blueprint:
+    """The page for one customer's flow. With no slug it is the generic page (clients/__init__.py registers it last):
+    it serves every customer that has no client file yet — the data and Sync work, Create stays off."""
+    generic = flow_slug is None
+    bp = (Blueprint("generic_client_page", __name__, template_folder=str(VIEWS), url_prefix="/app/<flow_slug>")
+          if generic else Blueprint(flow_slug, __name__, template_folder=str(VIEWS), url_prefix=f"/app/{flow_slug}"))
+
+    if generic:
+        @bp.url_value_preprocessor
+        def _take_flow(endpoint, values):
+            g.flow_slug = (values or {}).pop("flow_slug", "")
 
     def client_or_404(session, client_slug: str) -> Client:
         """An active client whose customer name belongs to this flow; anything else is not."""
         client = session.query(Client).filter_by(slug=client_slug, is_active=True).first()
-        if not client or slugify(client.client_name) != flow_slug:
+        if not client or slugify(client.client_name) != (g.flow_slug if generic else flow_slug):
             abort(404)
         return client
 
@@ -114,6 +123,8 @@ def make_blueprint(flow_slug: str) -> Blueprint:
                 "me": {"tms_login": cred is not None, "tms_status": cred.status if cred else "not_set"},
                 # False = dry run: jobs sign in and reach the Orders list but create nothing.
                 "create_enabled": tms_worker.create_enabled(),
+                # False = no clients/<customer>/ file yet: the data shows, but nothing can be created
+                "flow_ready": flows.load(client.client_name) is not None,
                 "doc_types": [{"id": t, "label": label} for t, label in shipment_files.DOC_TYPES],
                 "shipments": [{
                     "id": s.id,
@@ -197,6 +208,9 @@ def make_blueprint(flow_slug: str) -> Blueprint:
         session = SessionLocal()
         try:
             client = client_or_404(session, client_slug)
+            if flows.load(client.client_name) is None:
+                return jsonify({"error": f"There is no TMS order flow for {client.client_name} yet — "
+                                         "ask an administrator to add it."}), 409
             try:
                 return jsonify(jobs.enqueue(session, g.user["user_id"], client, ids))
             except jobs.JobError as e:

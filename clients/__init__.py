@@ -16,8 +16,11 @@ Registered: emvia, sabic.
 """
 from clients.emvia.emvia import bp as emvia_bp
 from clients.sabic.sabic import bp as sabic_bp
+from helpers import client_page
 
 TASK_REGISTRY = [
     emvia_bp,
     sabic_bp,
+    # Always last: the page for every customer that has no file above yet (data + Sync work, Create is off)
+    client_page.make_blueprint(),
 ]
