@@ -34,9 +34,9 @@ def lines(v):
     """The Lines grid: Depot Out and Depot In carry their reference and booked date, Unload the Depot Out date."""
     out, into = v.depot_out, v.depot_in
     return {
-        "DEPOT OUT": {"ref": out.reference, "bookedFrom": tms_date(out.date), "bookedUntil": tms_date(out.date)},
-        "UNLOAD": {"bookedFrom": tms_date(out.date), "bookedUntil": tms_date(out.date)},
-        "DEPOT IN": {"ref": into.reference, "bookedFrom": tms_date(into.date)},
+        "DEPOT OUT": {"ref": out.reference, "bookedFrom": date_time(out.date, TIME), "bookedUntil": date_time(out.date, TIME)},
+        "UNLOAD": {"bookedFrom": date_time(out.date, TIME), "bookedUntil": date_time(out.date, TIME)},
+        "DEPOT IN": {"ref": into.reference, "bookedFrom": date_time(into.date, TIME)},
     }
 
 
