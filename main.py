@@ -71,6 +71,8 @@ def create_app() -> Flask:
         start_workers()   # TMS_WORKERS browsers (0 = none); see helpers/tms_worker.py
         from database.source_sync import start_scheduler
         start_scheduler()  # only if SYNC_INTERVAL_MINUTES > 0
+        from helpers.job_video import start_cleanup
+        start_cleanup()    # deletes expired job videos (24 h after a successful run); see helpers/job_video.py
 
     @app.after_request
     def no_store(resp):
@@ -94,6 +96,20 @@ def create_app() -> Flask:
     @app.route("/admin")
     def admin_page():
         return send_from_directory(BASE_DIR / "admin" / "templates", "dashboard.html")
+
+    @app.route("/static/<path:filename>")
+    def shared_assets(filename):
+        # The shared design system (static/css/theme.css, static/js/theme.js): front-end files only.
+        if not filename.endswith((".js", ".css", ".svg", ".woff2")):
+            return ("Not found", 404)
+        return send_from_directory(BASE_DIR / "static", filename)
+
+    @app.route("/views/<path:filename>")
+    def view_assets(filename):
+        # The page CSS / JS of views/<page>/ (the HTML itself is rendered by the client blueprints).
+        if not filename.endswith((".js", ".css")):
+            return ("Not found", 404)
+        return send_from_directory(BASE_DIR / "views", filename)
 
     @app.route("/admin/<path:filename>")
     def admin_assets(filename):

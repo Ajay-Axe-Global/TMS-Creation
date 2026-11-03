@@ -28,7 +28,7 @@ from pathlib import Path
 
 from database.db import SessionLocal
 from database.models import JobArtifact, JobLog, TmsJob
-from helpers import flows, jobs, order_builder, shipment_files, tms_login, tms_nav
+from helpers import flows, job_video, jobs, order_builder, shipment_files, tms_login, tms_nav
 from helpers.flow_errors import FlowFailed, FlowNotReady
 
 logger = logging.getLogger("tms_worker")
@@ -142,12 +142,15 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
                              message=f'The attached file "{attached["name"]}" is no longer on the server — upload it again.')
             return
 
+    # Screen recording of this run (helpers/job_video.py). Not for a dry run: nothing is created, nothing to review.
+    recording = job_video.start(db, job) if create_enabled() else None
     context = page = None
     try:
         # A stuck login (phone never answered, unknown screen) is worth a screenshot; a wrong
         # password is not (the page would only show the account name).
         context, page, login = tms_login.get_logged_in_context(
             browser, db, cred, bc_url=bc_url, on_event=emit,
+            video_dir=recording.folder if recording else None, video_size=recording.size if recording else None,
             on_failure=lambda pg, err: _evidence(db, job, pg) if err.code in ("mfa_failed", "timeout") else None)
         frame = tms_nav.open_new_order(page, create=create_enabled(), on_event=emit)
 
@@ -221,9 +224,10 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
     finally:
         if context is not None:
             try:
-                context.close()
+                context.close()               # this is what completes the video file (also after a browser crash)
             except Exception:
                 pass
+        job_video.finish(db, recording, job)  # keeps whatever was recorded, success or not; sets how long it is kept
 
 
 # ── the pool ─────────────────────────────────────────────────────────────────
@@ -243,6 +247,9 @@ def start_workers(count: int | None = None):
         recovered = jobs.recover_interrupted(db)
         if recovered:
             logger.warning("Recovered %d interrupted job(s) after restart.", recovered)
+        cut = job_video.recover(db)          # recordings of runs the last server never finished: keep what exists
+        if cut:
+            logger.warning("Kept %d recording(s) of interrupted job(s).", cut)
     finally:
         SessionLocal.remove()
     _pool = BrowserPool(headless=headless())

@@ -1,79 +1,100 @@
 """
-Turns a job snapshot (helpers/jobs.build_payload) into what the TMS flow types (helpers/tms_creation), following the
-customer's map. ALL data preparation lives here — dates, which depot goes on which line, one container versus
-many, the cargo line, what each copied order must be corrected to. A customer file (clients/<name>/<name>.py)
-only says which values to pass, with these module-level names:
+Turns a job snapshot (helpers/jobs.build_payload) into what the TMS flow types (helpers/tms_creation), from the
+customer's map. The customer file (clients/<name>/<name>.py) DECIDES the final text of every field — which values, in
+what format, with which separator and time — in these module-level functions. Each gets `v`, one container's values
+(its own where it has them, else the shipment's) and returns the text to type; a field it does not return stays empty:
 
-    SEND          {field: True/False}   the General-tab fields (see GENERAL_FIELDS) plus "sealNo"; missing = not sent
-    LINES         {"DEPOT OUT": {"ref": True, "bookedFrom": True, "bookedUntil": True}, "UNLOAD": {...}, "DEPOT IN": {...}}
-                  the Lines to fill and which of their values are passed; a line not listed is left alone. UNLOAD only
-                  gets its booked dates, the same date as the Depot Out line's Booked From
-    CARGO         True/False            the Order Cargo line and each container's goods / quantity / weight
-    REMARKS       True/False            the Order Remarks line (the shipment's / container's remarks text)
-    GENERAL_TIME  "10:00"               the time typed after every date of the General tab (25/11/2026 10:00); "" = date only
-    CONSTANTS     {"tractionOrder": "Import", ...}   fixed text for a field, whatever the shipment says
-    SAME_FOR_ALL  ["container_type"]    container values that must be identical, because the first order is copied
-    COMPOSE       {"customerRef": ["client_ref", "itos_no"], "bookingRef": ["bl_number", "client_ref"]}
-                  a reference built from several shipment values, joined with SEPARATOR ("/"), empty ones left out
+    general(v)  -> {field: text}   the General tab: customerRef, bookingRef, vesselName, countryOrigin, countryDest,
+                  containerType, closingDatetime, carrier, depotOutFrom, vgmClosingDate, sealNo, tractionOrder,
+                  containerSubtype (see GENERAL_FIELDS / CONSTANT_FIELDS)
+    lines(v)    -> {"DEPOT OUT" | "UNLOAD" | "DEPOT IN": {"ref", "bookedFrom", "bookedUntil"}}   the Lines to fill and
+                  their texts; a line not returned is left alone. The TMS address no. is added here, from the depot
+    cargo(v)    -> {"goodNo", "quantity", "grossWeight"}   the Order Cargo line (optional; no goodNo = no cargo line)
+    remarks(v)  -> text                    the Order Remarks line (optional)
+    SAME_FOR_ALL = ["container_type"]      container values that must be identical, because the first order is copied
 
-The source's names become TMS codes here (helpers/tms_codes.py): goods -> goods code, carrier -> carrier shortcut.
+What `v` offers (see Values): client_ref, itos_no, bl_number, carrier, carrier_code (the TMS shortcut), vessel_name,
+country_of_origin, country_of_destination, closing_date, depot_out_from, vgm_closing_date, remarks, container_no,
+container_type, seal_no, goods, goods_code (the TMS code), qty, gross_weight, and depot_out / depot_in with .name,
+.address_no, .reference, .date. Dates are ISO text: format them with helpers.convert.tms_date / date_time, join values
+with helpers.convert.join. What stays here, the same for every customer: where each value goes, one container versus
+many, which depot is on which line, and what each copied order must be corrected to.
 
     check_payload(payload, flow) -> [reasons]   asked when the user clicks Create, BEFORE anything is queued
     create_order(page, frame, payload, log, flow)   called by the worker with the empty new-order card open
 """
 from helpers import tms_codes, tms_creation
-from helpers.convert import tms_date
 from helpers.flow_errors import FlowFailed
 
-# General-tab field -> (field name in the payload, is a date). The value comes from the container (its own, when it
-# differs from the shipment's) and else from the shipment.
-GENERAL_FIELDS = {
-    "customerRef": ("client_ref", False),
-    "bookingRef": ("bl_number", False),                         # BL number -> Booking Ref.
-    "vesselName": ("vessel_name", False),
-    "countryOrigin": ("country_of_origin", False),
-    "countryDest": ("country_of_destination", False),
-    "containerType": ("container_type", False),
-    "closingDatetime": ("closing_date", True),                  # -> General "Closing Datetime"
-    "carrier": ("carrier", False),
-    "depotOutFrom": ("depot_out_from", True),
-    "vgmClosingDate": ("vgm_closing_date", True),
-}
+# The General-tab fields a customer's general() may return (plus "sealNo", and the CONSTANT_FIELDS typed once)
+GENERAL_FIELDS = ("customerRef", "bookingRef", "vesselName", "countryOrigin", "countryDest", "containerType",
+                  "closingDatetime", "carrier", "depotOutFrom", "vgmClosingDate")
 SAME_ON_ALL_ORDERS = {"containerType"}                         # never corrected per order: the orders are copies
-COMPOSE_PARTS = {"client_ref", "itos_no", "bl_number"}          # what a COMPOSE reference may be built from
-CONSTANT_FIELDS = {"tractionOrder", "containerSubtype"}         # typed from the customer's CONSTANTS only
-LINE_KEYS = {"DEPOT OUT": "depot_out", "DEPOT IN": "depot_in"}  # Lines action -> key in the payload; this is the order
+CONSTANT_FIELDS = {"tractionOrder", "containerSubtype"}         # typed on the first order only
+LINE_KEYS = {"DEPOT OUT": "depot_out", "DEPOT IN": "depot_in"}  # Lines action -> key in the payload
 LINE_ACTIONS = ("DEPOT OUT", "UNLOAD", "DEPOT IN")              # the Lines rows, top to bottom (UNLOAD has no depot of its own)
 LINE_VALUES = {"ref", "bookedFrom", "bookedUntil"}
+CARGO_VALUES = {"goodNo", "quantity", "grossWeight"}
 DEFAULT_SAME_FOR_ALL = ("container_type",)                      # the flow copies the first order, so the type is shared
+VALUE_NAMES = ("client_ref", "itos_no", "bl_number", "carrier", "carrier_code", "vessel_name", "country_of_origin",
+               "country_of_destination", "closing_date", "depot_out_from", "vgm_closing_date", "remarks",
+               "container_no", "container_type", "seal_no", "goods", "qty", "gross_weight")
 
 
 class FlowSpecError(Exception):
-    """A customer file's map uses a name the builder does not know (almost always a typo)."""
+    """A customer file's functions use a name the builder does not know (almost always a typo)."""
+
+
+class Depot:
+    """A depot's values as the customer's functions see them; every value is "" when the shipment has none."""
+
+    def __init__(self, d: dict | None):
+        d = d or {}
+        self.name, self.address_no = d.get("name") or "", d.get("address_no") or ""
+        self.reference, self.date = d.get("reference") or "", d.get("date") or ""
+
+
+class Values:
+    """What a customer's functions read: one container's values, else the shipment's ("" where there is none)."""
+
+    def __init__(self, values: dict):
+        self.__dict__.update(values)
+
+    def __getattr__(self, name):                # only reached for a name that is not a value
+        raise FlowSpecError(f"{name!r} is not a value a customer file can use; known: "
+                            f"{', '.join(sorted([*VALUE_NAMES, 'goods_code', 'depot_out', 'depot_in']))}")
+
+
+def _text(value) -> str:
+    return "" if value is None else str(value)
 
 
 class Spec:
-    """A customer module's map, read once and validated."""
+    """A customer module's functions, read once and checked: they are run on an empty container, which catches a
+    misspelt value name or field name when the module is loaded instead of in the middle of a TMS order."""
 
     def __init__(self, flow):
         self.name = getattr(flow, "__name__", str(flow))
-        self.send = {k for k, on in getattr(flow, "SEND", {}).items() if on}
-        self.lines = {a: {v for v, on in vals.items() if on} for a, vals in getattr(flow, "LINES", {}).items()}
-        self.cargo = bool(getattr(flow, "CARGO", False))
-        self.remarks = bool(getattr(flow, "REMARKS", False))
-        self.general_time = str(getattr(flow, "GENERAL_TIME", "") or "")
-        self.constants = dict(getattr(flow, "CONSTANTS", {}))
+        self.general = getattr(flow, "general", None)
+        self.lines = getattr(flow, "lines", None)
+        self.cargo = getattr(flow, "cargo", None)
+        self.remarks = getattr(flow, "remarks", None)
         self.same_for_all = tuple(getattr(flow, "SAME_FOR_ALL", DEFAULT_SAME_FOR_ALL))
-        self.compose = {k: list(v) for k, v in getattr(flow, "COMPOSE", {}).items()}
-        self.separator = getattr(flow, "SEPARATOR", "/")
-        bad = (sorted(self.send - set(GENERAL_FIELDS) - {"sealNo"})
-               + sorted(a for a in self.lines if a not in LINE_ACTIONS)
-               + sorted(v for vals in self.lines.values() for v in vals - LINE_VALUES)
-               + sorted(set(self.constants) - set(GENERAL_FIELDS) - CONSTANT_FIELDS)
-               + sorted(set(self.compose) - set(GENERAL_FIELDS))
-               + sorted(p for parts in self.compose.values() for p in set(parts) - COMPOSE_PARTS))
+        if not callable(self.general):
+            raise FlowSpecError(f"{self.name}: it has no general(v) function")
+        empty = Values({**{n: "" for n in VALUE_NAMES}, "goods_code": "",
+                        "depot_out": Depot(None), "depot_in": Depot(None)})
+        bad = sorted(set(self.general(empty)) - set(GENERAL_FIELDS) - CONSTANT_FIELDS - {"sealNo"})
+        if self.lines:
+            got = self.lines(empty)
+            bad += sorted(a for a in got if a not in LINE_ACTIONS)
+            bad += sorted(v for vals in got.values() for v in set(vals) - LINE_VALUES)
+        if self.cargo:
+            bad += sorted(set(self.cargo(empty)) - CARGO_VALUES)
+        if self.remarks:
+            self.remarks(empty)
         if bad:
-            raise FlowSpecError(f"{self.name}: unknown name(s) in the map: {', '.join(bad)}")
+            raise FlowSpecError(f"{self.name}: unknown name(s) returned: {', '.join(bad)}")
 
 
 def check_payload(payload: dict, flow) -> list[str]:
@@ -105,98 +126,93 @@ def build_job(payload: dict, files: list, flow) -> dict:
     first = containers[0]
     single = len(containers) == 1
 
-    def value_of(c, name):
-        """This container's own value of a field, else the shipment's."""
-        v = c.get(name)
-        return v if v is not None else s.get(name)
+    def view(c) -> Values:
+        """What the customer's functions see for this container: its own values, else the shipment's."""
+        def value_of(name):
+            v = c.get(name)
+            return v if v is not None else s.get(name)
+        values = {n: ("" if value_of(n) is None else value_of(n)) for n in VALUE_NAMES}
+        values["goods_code"] = tms_codes.goods_code(c.get("goods")) or ""
+        values["depot_out"] = Depot(c.get("depot_out") or s.get("depot_out"))
+        values["depot_in"] = Depot(c.get("depot_in") or s.get("depot_in"))
+        return Values(values)
 
-    def typed(c, name, is_date, field=None):
-        """The text typed into a TMS field: a composed reference, a carrier shortcut, a d/MM/yyyy date or plain text."""
-        if field in spec.compose:
-            return spec.separator.join(p for p in (value_of(c, part) for part in spec.compose[field]) if p)
-        v = value_of(c, name)
-        if field == "carrier":
-            return tms_codes.carrier_code(v)
-        if is_date:
-            d = tms_date(v)
-            return f"{d} {spec.general_time}" if d and spec.general_time else d
-        return v or ""
+    def general(c) -> dict:
+        return {k: _text(v) for k, v in spec.general(view(c)).items()}
+
+    def lines_of(c) -> dict:
+        return spec.lines(view(c)) if spec.lines else {}
+
+    def cargo_of(c) -> dict:
+        return spec.cargo(view(c)) if spec.cargo else {}
+
+    def remarks_of(c) -> str:
+        return _text(spec.remarks(view(c))) if spec.remarks else ""
 
     # ── General ──
+    g = general(first)
     data = {"customer": client["tms_customer_no"], "tradelane": client["tms_tradelane_no"]}
-    for field in CONSTANT_FIELDS:
-        data[field] = spec.constants.get(field, "")
-    for field, (name, is_date) in GENERAL_FIELDS.items():
-        value = spec.constants.get(field)
-        if value is None and field in spec.send:
-            value = typed(first, name, is_date, field)
-        data[field] = value or ""
+    for field in (*sorted(CONSTANT_FIELDS), *GENERAL_FIELDS):
+        data[field] = g.get(field, "")
     # ONE container: typed here in General. SEVERAL: left empty (every copy would inherit it); each order gets
     # its own container and seal after the copies are made.
     data["containerNo"] = first["container_no"] if single else ""
-    data["sealNo"] = (first["seal_no"] or "") if single and "sealNo" in spec.send else ""
+    data["sealNo"] = g.get("sealNo", "") if single else ""
     # every attached document with the TMS Document Types zone it was dropped under
     data["files"] = [{"path": f["path"], "docType": f["doc_type"]} for f in files]
 
-    # ── Lines: Depot Out, then Depot In (a line is skipped when the shipment has none) ──
+    # ── Lines: Depot Out, Unload, Depot In (a depot line is skipped when the shipment has no such depot) ──
     # The template order is filled from the FIRST container, so its own depot (when it has one) comes first:
     # the fewer orders differ from the template, the fewer corrections are needed afterwards.
-    lines, out_date = [], ""
+    lines, wanted = [], lines_of(first)
     for action in LINE_ACTIONS:
-        wanted = spec.lines.get(action)
-        if wanted is None:
+        vals = wanted.get(action)
+        if vals is None:
             continue
-        if action == "UNLOAD":                              # no depot of its own: it takes the Depot Out line's date
-            if out_date:
-                lines.append({"action": action, "addressNo": "", "ref1": "",
-                              "bookedFrom": out_date if "bookedFrom" in wanted else "",
-                              "bookedUntil": out_date if "bookedUntil" in wanted else "", "closing": ""})
+        vals = {k: _text(v) for k, v in vals.items()}
+        if action == "UNLOAD":                              # no depot of its own: only its booked dates
+            if vals.get("bookedFrom") or vals.get("bookedUntil"):
+                lines.append({"action": action, "addressNo": "", "ref1": "", "bookedFrom": vals.get("bookedFrom", ""),
+                              "bookedUntil": vals.get("bookedUntil", ""), "closing": ""})
             continue
         depot = first.get(LINE_KEYS[action]) or s.get(LINE_KEYS[action])
         if not depot:
             continue
-        date = tms_date(depot["date"])
-        if action == "DEPOT OUT" and "bookedFrom" in wanted:
-            out_date = date
-        lines.append({"action": action, "addressNo": depot["address_no"],
-                      "ref1": (depot["reference"] or "") if "ref" in wanted else "",
-                      "bookedFrom": date if "bookedFrom" in wanted else "",
-                      "bookedUntil": date if "bookedUntil" in wanted else "",
+        lines.append({"action": action, "addressNo": depot["address_no"], "ref1": vals.get("ref", ""),
+                      "bookedFrom": vals.get("bookedFrom", ""), "bookedUntil": vals.get("bookedUntil", ""),
                       "closing": ""})
     data["lines"] = lines
 
     # ── Order Cargo: one line, from the first container ──
-    good_no = tms_codes.goods_code(first.get("goods"))
-    data["cargo"] = ([{"goodNo": good_no, "quantity": first["qty"] or "", "grossWeight": first["gross_weight"] or ""}]
-                     if spec.cargo and good_no else [])
+    cg = cargo_of(first)
+    data["cargo"] = ([{"goodNo": cg["goodNo"], "quantity": cg.get("quantity") or "",
+                       "grossWeight": cg.get("grossWeight") or ""}] if cg.get("goodNo") else [])
 
     # ── Order Remarks: one line (the first container's remarks; a container whose own differ is corrected later) ──
-    data["remarks"] = (value_of(first, "remarks") or "") if spec.remarks else ""
+    data["remarks"] = remarks_of(first)
 
     # ── what each order must end up with (container, seal, and what may differ from the first order) ──
     def depot(c, key, action):
         """(address no., reference, booked date) this container's order must have on its depot line."""
         d = c.get(key) or s.get(key)
-        wanted = spec.lines.get(action)
-        if not d or wanted is None:
+        vals = lines_of(c).get(action)
+        if not d or vals is None:
             return "", "", ""
-        return (d["address_no"] or "", (d["reference"] or "") if "ref" in wanted else "",
-                tms_date(d["date"]) if "bookedFrom" in wanted else "")
+        return d["address_no"] or "", _text(vals.get("ref")), _text(vals.get("bookedFrom"))
 
     def container(c):
         out_no, out_ref, out_booked = depot(c, "depot_out", "DEPOT OUT")
         in_no, in_ref, in_booked = depot(c, "depot_in", "DEPOT IN")
+        gc, cg = general(c), cargo_of(c)
         return {"containerNo": c["container_no"],
-                "sealNo": (c["seal_no"] or "") if "sealNo" in spec.send else "",
+                "sealNo": gc.get("sealNo", ""),
                 # the General fields this order must end with; the flow corrects those that differ from the first order
-                "general": {f: typed(c, name, is_date, f) for f, (name, is_date) in GENERAL_FIELDS.items()
-                            if f in spec.send and f not in SAME_ON_ALL_ORDERS and f not in spec.constants},
-                "remarks": (value_of(c, "remarks") or "") if spec.remarks else "",
+                "general": {f: gc[f] for f in GENERAL_FIELDS if f in gc and f not in SAME_ON_ALL_ORDERS},
+                "remarks": remarks_of(c),
                 "depotOutNo": out_no, "depotOutRef": out_ref, "depotOutDate": out_booked,
                 "depotInNo": in_no, "depotInRef": in_ref, "depotInDate": in_booked,
-                "goodNo": (tms_codes.goods_code(c["goods"]) or "") if spec.cargo else "",
-                "quantity": (c["qty"] or "") if spec.cargo else "",
-                "grossWeight": (c["gross_weight"] or "") if spec.cargo else ""}
+                "goodNo": _text(cg.get("goodNo")), "quantity": cg.get("quantity") or "",
+                "grossWeight": cg.get("grossWeight") or ""}
 
     return {"data": data, "containers": [container(c) for c in containers], "calcRevenues": True}
 

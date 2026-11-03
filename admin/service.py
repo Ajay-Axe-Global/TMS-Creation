@@ -6,11 +6,13 @@ and commits its own writes. routes/admin_routes.py only translates HTTP <-> this
 from sqlalchemy import func
 
 from database.models import (
-    AuditLog, Client, DepotAddress, SourceLookup, TmsCredential, User, UserClientAccess,
+    AuditLog, Carrier, Client, ClientTradeLane, DepotAddress, SourceLookup, TmsCredential, User, UserClientAccess,
 )
 from helpers.convert import slugify
 from helpers import addresses as address_svc
 from helpers import audit as audit_svc
+from helpers import carriers as carrier_svc
+from helpers import tradelanes
 from helpers.crypto_utils import encrypt_secret
 from helpers.jwt_utils import hash_password
 
@@ -49,7 +51,7 @@ def _fmt(dt):
 
 def list_lookups(session):
     """Customer and warehouse names as the source spells them — suggestions for the Add client form."""
-    out = {"clients": [], "warehouses": []}
+    out = {"clients": [], "warehouses": [], "carriers": tradelanes.choices(session)}
     for r in session.query(SourceLookup).order_by(func.lower(SourceLookup.name)).all():
         out["clients" if r.kind == "client" else "warehouses"].append(r.name)
     return out
@@ -63,9 +65,10 @@ def client_dict(c: Client) -> dict:
     return {"id": c.id, "name": c.name, "slug": c.slug,
             "client_name": c.client_name, "warehouse": c.warehouse,
             "flow_slug": slugify(c.client_name),        # the clients/<flow_slug>/ code folder
-            "tms_customer_no": c.tms_customer_no, "tms_tradelane_no": c.tms_tradelane_no,
+            "tms_customer_no": c.tms_customer_no,
+            "tradelanes": [{"carrier": t.carrier, "tradelane_no": t.tradelane_no} for t in c.tradelanes],
             "is_active": c.is_active, "user_count": len(c.grants),
-            "ready": bool(c.tms_customer_no and c.tms_tradelane_no and c.warehouse)}
+            "ready": bool(c.tms_customer_no and c.tradelanes and c.warehouse)}
 
 
 def list_clients(session):
@@ -82,6 +85,36 @@ def _check_client_free(session, client_name: str, warehouse: str, slug: str, exc
         raise ServiceError(f'"{display_name(client_name, warehouse)}" already exists', 409)
 
 
+def _set_tradelanes(session, c: Client, rows) -> None:
+    """Replace the client's trade lanes with [{"carrier", "tradelane_no"}]: the carrier is ALL or a TMS carrier
+    shortcut, each at most once; empty rows are ignored."""
+    clean = {}
+    for r in rows:
+        no = _clean(r.get("tradelane_no"))
+        carrier = _clean(r.get("carrier")).upper()
+        if not no and not carrier:
+            continue
+        allowed = tradelanes.choices(session)
+        if carrier not in allowed:
+            raise ServiceError(f'Trade lane carrier must be one of: {", ".join(allowed)} (add new ones in Admin > Carriers)')
+        if not no:
+            raise ServiceError(f"Enter the trade lane no. for {carrier}")
+        if carrier in clean:
+            raise ServiceError(f"{carrier} has more than one trade lane")
+        clean[carrier] = no
+    # change the rows in place: new rows are inserted before removed ones are deleted, which would trip the
+    # one-lane-per-carrier key when a carrier's lane is only being renumbered
+    have = {t.carrier: t for t in c.tradelanes}
+    for carrier, t in have.items():
+        if carrier not in clean:
+            c.tradelanes.remove(t)
+    for carrier, no in clean.items():
+        if carrier in have:
+            have[carrier].tradelane_no = no
+        else:
+            c.tradelanes.append(ClientTradeLane(carrier=carrier, tradelane_no=no))
+
+
 def create_client(session, actor_id, data):
     client_name = _need(data.get("client_name"), "Client name")
     warehouse = _need(data.get("warehouse"), "Warehouse")
@@ -92,8 +125,9 @@ def create_client(session, actor_id, data):
     _check_client_free(session, client_name, warehouse, slug)
     c = Client(client_name=client_name, warehouse=warehouse, name=name, slug=slug,
                tms_customer_no=_clean(data.get("tms_customer_no")) or None,
-               tms_tradelane_no=_clean(data.get("tms_tradelane_no")) or None)
+               )
     session.add(c)
+    _set_tradelanes(session, c, data.get("tradelanes") or [])
     audit_svc.audit(session, actor_id, "client.create", name)
     session.commit()
     return client_dict(c)
@@ -113,12 +147,17 @@ def update_client(session, actor_id, client_id, data):
         _check_client_free(session, c.client_name, warehouse, slug, exclude_id=c.id)
         changes.append(f"warehouse {c.warehouse!r} -> {warehouse!r}")
         c.warehouse, c.name, c.slug = warehouse, name, slug
-    for field in ("tms_customer_no", "tms_tradelane_no"):
-        if field in data:
-            new = _clean(data[field]) or None
-            if new != getattr(c, field):
-                changes.append(f"{field}: {getattr(c, field)!r} -> {new!r}")
-                setattr(c, field, new)
+    if "tms_customer_no" in data:
+        new = _clean(data["tms_customer_no"]) or None
+        if new != c.tms_customer_no:
+            changes.append(f"tms_customer_no: {c.tms_customer_no!r} -> {new!r}")
+            c.tms_customer_no = new
+    if "tradelanes" in data:
+        before = {t.carrier: t.tradelane_no for t in c.tradelanes}
+        _set_tradelanes(session, c, data["tradelanes"] or [])
+        after = {t.carrier: t.tradelane_no for t in c.tradelanes}
+        if before != after:
+            changes.append(f"trade lanes: {before} -> {after}")
     if "is_active" in data and bool(data["is_active"]) != c.is_active:
         c.is_active = bool(data["is_active"])
         changes.append(f"is_active -> {c.is_active}")
@@ -126,6 +165,69 @@ def update_client(session, actor_id, client_id, data):
         audit_svc.audit(session, actor_id, "client.update", c.name, "; ".join(changes))
     session.commit()
     return client_dict(c)
+
+
+# ── Carriers (shipping lines: TMS shortcut + the spellings the source uses) ────────────────
+
+def carrier_dict(c: Carrier) -> dict:
+    # the shortcut is always one of the names the source can use, so it is listed too
+    return {"id": c.id, "code": c.code, "names": ", ".join(carrier_svc.split_names(f"{c.code}, {c.names}"))}
+
+
+def list_carriers(session):
+    return [carrier_dict(c) for c in session.query(Carrier).order_by(Carrier.code)]
+
+
+def _carrier_names(session, names, code, exclude_id=None) -> str:
+    """The cleaned spellings; a spelling already used by another carrier would make the match ambiguous."""
+    cleaned = carrier_svc.split_names(names)
+    others = {}
+    for o in session.query(Carrier).all():
+        if o.id != exclude_id:
+            for n in [o.code, *carrier_svc.split_names(o.names)]:
+                others.setdefault(n, o.code)
+    for n in [code, *cleaned]:
+        if n in others:
+            raise ServiceError(f'"{n}" already belongs to carrier {others[n]}', 409)
+    return ", ".join(n for n in cleaned if n != code)
+
+
+def create_carrier(session, actor_id, data):
+    code = " ".join(_need(data.get("code"), "TMS carrier shortcut").upper().split())
+    if len(code) > 20 or "," in code:
+        raise ServiceError("The TMS carrier shortcut must be short, e.g. MSK")
+    if code == tradelanes.ALL:
+        raise ServiceError(f'"{tradelanes.ALL}" is reserved for the lane that applies to every carrier')
+    c = Carrier(code=code, names=_carrier_names(session, data.get("names"), code))
+    session.add(c)
+    audit_svc.audit(session, actor_id, "carrier.create", code, c.names)
+    session.commit()
+    return carrier_dict(c)
+
+
+def update_carrier(session, actor_id, carrier_id, data):
+    """Only the spellings change: the shortcut is what trade lanes refer to."""
+    c = session.get(Carrier, carrier_id)
+    if not c:
+        raise ServiceError("Carrier not found", 404)
+    names = _carrier_names(session, data.get("names"), c.code, exclude_id=c.id)
+    audit_svc.audit(session, actor_id, "carrier.update", c.code, f"{c.names!r} => {names!r}")
+    c.names = names
+    session.commit()
+    return carrier_dict(c)
+
+
+def delete_carrier(session, actor_id, carrier_id):
+    c = session.get(Carrier, carrier_id)
+    if not c:
+        raise ServiceError("Carrier not found", 404)
+    used = session.query(Client).join(ClientTradeLane).filter(ClientTradeLane.carrier == c.code).all()
+    if used:
+        raise ServiceError(f"{c.code} has a trade lane on {', '.join(x.name for x in used)} — remove that lane first", 409)
+    audit_svc.audit(session, actor_id, "carrier.delete", c.code)
+    session.delete(c)
+    session.commit()
+    return {"deleted": carrier_id}
 
 
 # ── Depot addresses (one list for all clients: source depot name -> TMS address no.) ────────

@@ -9,6 +9,7 @@ calls make_blueprint("<customer>") to get it.
     POST   /app/<customer>/<client_slug>/shipments/<id>/files      attach a document (multipart "file" + "doc_type")
     GET    /app/<customer>/<client_slug>/shipments/<id>/files/<fid>   download it
     DELETE /app/<customer>/<client_slug>/shipments/<id>/files/<fid>   remove it
+    GET    /app/<customer>/<client_slug>/shipments/<id>/videos/<vid>  the screen recording of a run (webm)
 
 Create does not touch the browser: it queues one job per shipment (helpers/jobs.py) and the
 worker (helpers/tms_worker.py) does the rest; the page polls /data for progress.
@@ -18,9 +19,10 @@ from pathlib import Path
 from flask import Blueprint, abort, current_app, g, jsonify, render_template, request, send_file
 
 from database.db import SessionLocal
-from database.models import Client, Shipment, TmsCredential
+from database.models import Client, JobVideo, Shipment, TmsCredential, TmsJob
 from database import source_sync
-from helpers import jobs, shipment_files, tms_worker
+from helpers import carriers as carrier_svc
+from helpers import job_video, jobs, shipment_files, tms_worker, tradelanes
 from helpers.audit import audit
 from helpers.convert import json_number as _n, iso as _d, slugify
 from helpers.decorators import client_access_required
@@ -90,7 +92,15 @@ def make_blueprint(flow_slug: str) -> Blueprint:
             events = jobs.latest_events(session, [j.id for j in latest_job.values()
                                                   if j.status in jobs.ACTIVE])
             me_id = g.user["user_id"]
+            code_of = carrier_svc.matcher(session)
             cred = session.query(TmsCredential).filter_by(user_id=me_id).first()
+            # The finished recordings of this client's runs, per shipment (one query, not one per row).
+            videos: dict[int, list] = {}
+            for v, shipment_id in (session.query(JobVideo, TmsJob.shipment_id).join(TmsJob, JobVideo.job_id == TmsJob.id)
+                                   .filter(TmsJob.client_id == client.id, JobVideo.status == "ready")
+                                   .order_by(JobVideo.id).all()):
+                if job_video.exists(v):
+                    videos.setdefault(shipment_id, []).append(job_video.view(v))
 
             def activity(s):
                 job = latest_job.get(s.id)
@@ -111,7 +121,7 @@ def make_blueprint(flow_slug: str) -> Blueprint:
                     "client_ref": s.client_ref,
                     "carrier": s.carrier,
                     "customer_no": client.tms_customer_no,
-                    "tradelane_no": client.tms_tradelane_no,
+                    "tradelane_no": tradelanes.lane_for(client, code_of(s.carrier)),
                     "remarks": s.remarks,
                     "vessel_name": s.vessel_name,
                     "ata_date": _d(s.depot_out_from),     # the source's ata_date is stored as depot_out_from
@@ -122,6 +132,7 @@ def make_blueprint(flow_slug: str) -> Blueprint:
                     "tms_error": s.tms_error,
                     "selectable": s.tms_status in jobs.QUEUEABLE,
                     "activity": activity(s),
+                    "videos": videos.get(s.id, []),
                     "files": [{"id": f.id, "doc_type": f.doc_type, "name": f.original_name, "size": f.size,
                                "missing": not shipment_files.exists(f)} for f in s.files],
                     "depot_in": s.depot_in_address,
@@ -245,6 +256,23 @@ def make_blueprint(flow_slug: str) -> Blueprint:
             if locked:
                 return locked
             return jsonify({"removed": shipment_files.remove(session, shipment, file_id)})
+        finally:
+            session.close()
+
+    # ── the recording of a run (helpers/job_video.py) ─────────────────────────────────────────────
+
+    @bp.route("/<client_slug>/shipments/<int:shipment_id>/videos/<int:video_id>", methods=["GET"])
+    @client_access_required()
+    def watch_video(client_slug, shipment_id, video_id):
+        session = SessionLocal()
+        try:
+            client = client_or_404(session, client_slug)
+            shipment = shipment_or_404(session, client, shipment_id)
+            v = session.get(JobVideo, video_id)
+            if v is None or v.status != "ready" or v.job.shipment_id != shipment.id or not job_video.exists(v):
+                abort(404)
+            # conditional: the browser can seek (Range requests) instead of downloading everything first
+            return send_file(job_video.absolute_path(v), mimetype="video/webm", conditional=True)
         finally:
             session.close()
 

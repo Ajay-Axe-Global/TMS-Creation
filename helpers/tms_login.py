@@ -422,11 +422,14 @@ def launch_browser(playwright, *, headless: bool = False):
     )
 
 
-def new_context(browser, storage_state: dict | None = None):
-    """A fresh isolated context (one per job), optionally pre-loaded with a saved login."""
+def new_context(browser, storage_state: dict | None = None, *, video_dir: str | None = None,
+                video_size: dict | None = None):
+    """A fresh isolated context (one per job), optionally pre-loaded with a saved login. With video_dir the page is
+    recorded there (helpers/job_video.py); the file is complete once the context is closed."""
+    video = {"record_video_dir": video_dir, "record_video_size": video_size} if video_dir else {}
     return browser.new_context(
         storage_state=storage_state, viewport={"width": 1600, "height": 900},
-        locale=TMS_LOCALE, timezone_id=TMS_TIMEZONE,
+        locale=TMS_LOCALE, timezone_id=TMS_TIMEZONE, **video,
     )
 
 
@@ -456,7 +459,7 @@ def persist_session(db, credential, context) -> None:
 
 
 def get_logged_in_context(browser, db, credential, *, bc_url: str | None = None, on_event=None,
-                          on_failure=None, **kw):
+                          on_failure=None, video_dir: str | None = None, video_size: dict | None = None, **kw):
     """Per-job login: returns (context, page, LoginResult). The caller closes the context.
 
     On success the credential becomes 'connected' and its session is saved. On a
@@ -468,7 +471,7 @@ def get_logged_in_context(browser, db, credential, *, bc_url: str | None = None,
     import datetime
     from helpers.crypto_utils import decrypt_secret
 
-    context = new_context(browser, _load_state(credential))
+    context = new_context(browser, _load_state(credential), video_dir=video_dir, video_size=video_size)
     page = context.new_page()
     try:
         result = ensure_logged_in(

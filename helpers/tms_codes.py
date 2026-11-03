@@ -1,5 +1,5 @@
 """
-The codes TMS wants where the source has a name: goods, carriers and depot addresses. Every customer uses the same TMS,
+The codes TMS wants where the source has a name: goods and depot addresses (carriers live in the carrier table). Every customer uses the same TMS,
 so these tables are shared; a client's own Admin > Addresses mapping still wins over the depot defaults below.
 """
 import re
@@ -14,31 +14,6 @@ def goods_code(name: str | None) -> str | None:
     if re.fullmatch(r"G\d{4}", key):                    # already a TMS code
         return key
     return GOODS.get(key)
-
-
-# ── carriers ────────────────────────────────────────────────────────────────────────────────────────────────────
-# TMS carrier shortcut -> the ways the source writes that carrier (the SCAC codes MAEU, EGLV ... included)
-CARRIERS = {
-    "MSK": ["MAERSK", "MAEU", "MSK"],
-    "MSC": ["MSC"],
-    "HPG": ["HAPAG-LLOYD", "HAPAG LLOYD", "HAPAG", "HPG"],
-    "COSCO": ["COSCO", "COSOC", "COSU"],
-    "YML": ["YANG MING", "YANGMING", "YML"],
-    "CMA": ["CMA CGM", "CMA"],
-    "EVG": ["EVERGREEN", "EGLV", "EVG"],
-    "ONE": ["ONE", "ONEY"],
-    "ZIM": ["ZIM"],
-}
-_CARRIER_BY_NAME = {name: code for code, names in CARRIERS.items() for name in names}
-_CARRIER_RX = re.compile(r"(?<![A-Z0-9])(" + "|".join(re.escape(n) for n in sorted(_CARRIER_BY_NAME, key=len, reverse=True))
-                         + r")(?![A-Z0-9])")
-
-
-def carrier_code(name: str | None) -> str:
-    """TMS shortcut of the shipping line named in the source's carrier text — "TRANSWOLRD // ONE" is ONE, "HOYER / HAPAG"
-    is HPG, the first line named wins. Any other carrier (HMM, OOCL, a forwarder ...) gives "", which TMS is sent empty."""
-    m = _CARRIER_RX.search((name or "").upper())
-    return _CARRIER_BY_NAME[m.group(1)] if m else ""
 
 
 # ── depot addresses ─────────────────────────────────────────────────────────────────────────────────────────────

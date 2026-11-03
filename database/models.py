@@ -10,7 +10,7 @@ Layout
   Client ──< Shipment ──< ShipmentContainer     one shipment per ITOS number
   Shipment ──1 ShipmentFile                     the one document dropped on its row (the TMS attachment)
   DepotAddress                                  depot name (as in the source) -> TMS address no., one list for all
-  Shipment ──< TmsJob ──< JobLog / JobArtifact
+  Shipment ──< TmsJob ──< JobLog / JobArtifact / JobVideo
 """
 import datetime
 
@@ -34,8 +34,8 @@ class Client(Base):
     its own TMS customer no. / trade lane. (client_name, warehouse) is what the source
     data's `client` and `warehouse` columns are matched against.
 
-    Every shipment of a client is created in TMS under the SAME customer no. and trade
-    lane, so both live here and never on the shipment. A job snapshots them into its
+    Every shipment of a client is created in TMS under the SAME customer no.; the trade lane
+    depends on the shipment's carrier (ClientTradeLane). Both live on the client, never on the shipment. A job snapshots them into its
     payload when the user triggers it."""
     __tablename__ = "clients"
     __table_args__ = (UniqueConstraint("client_name", "warehouse", name="uq_client_name_warehouse"),)
@@ -46,11 +46,37 @@ class Client(Base):
     name = Column(String(180), unique=True, nullable=False)     # display: "Emvia - 1147"
     slug = Column(String(180), unique=True, nullable=False)     # "emvia_1147" (used in URLs)
     tms_customer_no = Column(String(60), nullable=True)         # e.g. K0014043
-    tms_tradelane_no = Column(String(60), nullable=True)        # e.g. TLVMT25-100245
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
 
     grants = relationship("UserClientAccess", back_populates="client")
+    tradelanes = relationship("ClientTradeLane", back_populates="client", cascade="all, delete-orphan",
+                              order_by="ClientTradeLane.carrier")
+
+
+class ClientTradeLane(Base):
+    """A client's TMS trade lane no. for one carrier (the TMS carrier shortcut: MSK, MSC, HPG ...). The carrier "ALL"
+    is the lane for every carrier the client has no lane of its own for — a client with one lane has just that row."""
+    __tablename__ = "client_trade_lanes"
+    __table_args__ = (UniqueConstraint("client_id", "carrier", name="uq_client_lane_carrier"),)
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    carrier = Column(String(20), nullable=False)                # "ALL" | a Carrier.code
+    tradelane_no = Column(String(60), nullable=False)           # e.g. TLVMT25-100245
+
+    client = relationship("Client", back_populates="tradelanes")
+
+
+class Carrier(Base):
+    """A shipping line: the TMS carrier shortcut ("MSK") and the ways the source writes it ("MAERSK, MAEU"). The
+    shortcut is what is typed into TMS and what a client's trade lane per carrier refers to. database/seed.py holds
+    the starting list; Admin > Carriers adds new ones."""
+    __tablename__ = "carriers"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), unique=True, nullable=False)      # "MSK" — upper case
+    names = Column(String(500), nullable=False, default="")     # source spellings, comma separated: "MAERSK, MAEU"
 
 
 class SourceLookup(Base):
@@ -312,6 +338,27 @@ class TmsJob(Base):
     logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan",
                         order_by="JobLog.seq")
     artifacts = relationship("JobArtifact", back_populates="job", cascade="all, delete-orphan")
+    videos = relationship("JobVideo", back_populates="job", cascade="all, delete-orphan", order_by="JobVideo.id")
+
+
+class JobVideo(Base):
+    """The screen recording of one run of a job (helpers/job_video.py). One row per recorded page; a retry makes new rows.
+    status "recording" = the run is still going (or was cut off and not yet closed out); "ready" = a file you can play."""
+    __tablename__ = "job_videos"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("tms_jobs.id"), nullable=False, index=True)
+    attempt = Column(Integer, nullable=False, default=1)       # the job's attempt number, for display only
+    part = Column(Integer, nullable=False, default=1)          # 2+ = a second page (pop-up) of the same run
+    path = Column(String(500), nullable=True)                  # relative to uploads/
+    status = Column(String(12), nullable=False, default="recording")   # recording | ready
+    cut_short = Column(Boolean, nullable=False, default=False)         # the run was cut off (server restart)
+    size = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)               # NULL = kept until an administrator deletes it
+
+    job = relationship("TmsJob", back_populates="videos")
 
 
 class JobLog(Base):

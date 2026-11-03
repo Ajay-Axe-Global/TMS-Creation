@@ -3,6 +3,21 @@
   const errorBox = document.getElementById("error");
   const submitBtn = document.getElementById("submit-btn");
 
+  ui.themeToggle(document.getElementById("theme-toggle"));
+
+  // Password visibility
+  const pwInput = document.getElementById("password");
+  const pwToggle = document.getElementById("pw-toggle");
+  const eyeOpen = document.getElementById("eye-open");
+  const eyeClosed = document.getElementById("eye-closed");
+  pwToggle.addEventListener("click", () => {
+    const show = pwInput.type === "password";
+    pwInput.type = show ? "text" : "password";
+    eyeOpen.style.display = show ? "none" : "";
+    eyeClosed.style.display = show ? "" : "none";
+    pwToggle.setAttribute("aria-label", show ? "Hide password" : "Show password");
+  });
+
   const home = role => (role === "admin" ? "/admin" : "/dashboard");
 
   // Bfcache restores (e.g. navigating back to /login after logout) can resurrect
