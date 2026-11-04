@@ -165,6 +165,7 @@ container can differ from the first order.
 | `TMS_HEADLESS` | `0` = browser window visible (testing), `1` = hidden (server) |
 | `TMS_FLOW_ENGINE` | `native` = the Playwright flow in `tms_creation.py` |
 | `TMS_BROWSERS`, `TMS_SLOTS` | Browsers in the pool × job slots each (default 3 × 3 = 9 jobs at once) |
+| `TMS_COPY_WAIT` | Seconds to wait for TMS to finish making the copies after OK in Copy Order (default 180) |
 | `SRC_PG_*`, `SRC_TABLE` | The source database and table |
 | `SYNC_INTERVAL_MINUTES` | Automatic sync interval (`0` = manual Sync only) |
 

@@ -28,6 +28,7 @@ fields is READ BACK and compared (Section "Verify").
 import base64
 import logging
 import mimetypes
+import os
 import re
 import time
 from pathlib import Path
@@ -36,6 +37,12 @@ from helpers import tms_nav
 from helpers.flow_errors import FlowFailed
 
 logger = logging.getLogger("tms_creation")
+
+# Seconds to wait for BC to finish making the copies after OK in the Copy Order dialog.
+try:
+    COPY_WAIT = max(20.0, float(os.environ.get("TMS_COPY_WAIT", "180")))
+except ValueError:
+    COPY_WAIT = 180.0
 
 _JS_VIS = "const vis = e => { const r = e.getBoundingClientRect(); return r.width > 2 && r.height > 2 && getComputedStyle(e).visibility !== 'hidden'; };"
 _JS_NORM = "const norm = s => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();"
@@ -820,9 +827,35 @@ class Creation:
                 else:
                     self.step("Lines", ln["action"], cap, key, "Booked DateTime Until", ln["bookedUntil"], settle=0.6)
             self.step("Lines", ln["action"], cap, key, "Closing Date Time", ln.get("closing"))
+        other = self.data.get("otherLines") or {}
+        if other:
+            self.fill_other_lines(other.get("bookedFrom"), other.get("bookedUntil"))
         self.close_date_picker()
         self.blur_active()
         self.wait(1.0)
+
+    def other_rows(self):
+        """(rowkey, action code) of every Lines row that is not DEPOT OUT / DEPOT IN, top to bottom. TMS generates them
+        (UNLOAD WH, PICK UP, DROP OFF ... a code can repeat); the empty last row has no action and is skipped."""
+        cap = "Lines"
+        i = self.col_idx(cap, "Action Code")
+        found = []
+        for r in self.rows(cap):
+            action = self.cell_text(r.locator("td").nth(i)).strip()
+            if action and norm(action) not in ("depot out", "depot in"):
+                found.append((r.get_attribute("rowkey"), action))
+        return found
+
+    def fill_other_lines(self, booked_from, booked_until):
+        """Booked DateTime From / Until on every generated row between Depot Out and Depot In."""
+        cap = "Lines"
+        rows = self.until(self.other_rows, 4.0) or []
+        if not rows:
+            self.L("Lines", Line="OTHERS", Status="No other rows in Lines")
+            return
+        for key, action in rows:
+            self.type_booked(action, cap, key, "From", booked_from)
+            self.type_booked(action, cap, key, "Until", booked_until)
 
     # The UNLOAD row's dates are typed into the cell found by its control name (BookedDateTimeFrom / ...Until): click the
     # cell, type, Tab. If that does not take, the same value is set by script (native setter + input / change / Enter),
@@ -847,7 +880,8 @@ class Creation:
         took = lambda: norm(value) in norm(shown())
         how = None
         try:
-            if which == "Until" and self.until(took, 1.0):        # TMS copied "From" into "Until" already
+            # the value is already there: TMS copied "From" into "Until", or the row came with it
+            if (which == "Until" and self.until(took, 1.0)) or (which == "From" and took()):
                 self.L("Lines", Line=line, Field=abbr, Value=value, Actual=shown(), Extra="filled by TMS", Status="OK")
                 return
             idx = self.col_idx(cap, abbr)
@@ -1115,10 +1149,17 @@ class Creation:
         ok.click()
         # OK is done once the Copy dialog is gone OR the "TMS Copy Orders Overviews" panel is showing: BC opens that
         # panel on top and can leave the Copy form in the page underneath it, so "form gone" alone is not reliable.
-        closed = self.until(lambda: not self.copy_form() or self.overview_dlg(), 20.0, 0.1)
-        self.L("Copy", Field="OK", Status="Copies made" if closed else "CHECK — dialog still open")
+        # Making the copies is server work in Business Central and can take minutes on a busy server, so wait for it
+        # (TMS_COPY_WAIT seconds, default 180) instead of giving up and closing the browser mid-copy. It returns the
+        # moment the dialog is gone or the overview shows, so this is a ceiling, never a fixed wait. (Do NOT click
+        # "message" dialogs here: the Copy Orders Overview itself looks like one and would be closed by the bot.)
+        t0 = time.monotonic()
+        closed = self.until(lambda: not self.copy_form() or self.overview_dlg(), COPY_WAIT, 0.1)
+        self.L("Copy", Field="OK", Value=f"{time.monotonic() - t0:.0f}s",
+               Status="Copies made" if closed else f"CHECK — dialog still open after {COPY_WAIT:.0f}s")
         if not closed:
-            raise _Stop("Copy Order dialog did not close after OK")
+            raise _Stop(f"Copy Order dialog did not close {COPY_WAIT:.0f}s after OK — the copies may still be "
+                        "being made in TMS; check the order list before running this shipment again")
 
     _OVERVIEW_JS = "() => {" + _JS_VIS + _JS_NORM + r"""
       document.querySelectorAll('[data-pw="ovclose"]').forEach(e => e.removeAttribute('data-pw'));
@@ -1153,7 +1194,7 @@ class Creation:
         """The copies are made and BC shows "TMS Copy Orders Overview". Read the order numbers and click Close the moment
         the panel is ready (Close enabled and the numbers listed) — polled every 0.1 s, no fixed wait."""
         self.head("7) COPY ORDERS OVERVIEW")
-        if not self.until(self.overview_dlg, 20.0, 0.1):
+        if not self.until(self.overview_dlg, min(COPY_WAIT, 60.0), 0.1):
             self.L("Overview", Status="CHECK — overview pane did not appear")
             return []
         t0 = time.monotonic()
@@ -1550,6 +1591,11 @@ class Creation:
             changes["depot_in_date"] = c["depotInDate"]
         if "UNLOAD" in lines and "depot_out_date" in changes:        # UNLOAD takes the Depot Out date
             changes["unload_date"] = changes["unload_until"] = changes["depot_out_date"]
+        tmpl_other = self.data.get("otherLines") or {}               # the generated rows between Depot Out and Depot In
+        if c.get("otherFrom") and c["otherFrom"] != (tmpl_other.get("bookedFrom") or ""):
+            changes["other_date"] = c["otherFrom"]
+            if c.get("otherUntil"):
+                changes["other_until"] = c["otherUntil"]
         if c.get("remarks") and c["remarks"] != str(self.data.get("remarks") or ""):
             changes["remarks"] = c["remarks"]
         for key, value in (c.get("general") or {}).items():
@@ -1615,6 +1661,9 @@ class Creation:
                     # a reference is read back from the grid; a date shows in the grid's own format, so it is not compared
                     check = (lambda v=val, n=changes[change]: norm(v(abbr)) == norm(n)) if abbr == "Order Line Ref 1" else None
                     self.replace_cell("Lines", action, cap, key, abbr, changes[change], check=check)
+        if "other_date" in changes or "other_until" in changes:
+            self.ensure_pane("Lines", lambda: self.grid("Lines"))
+            self.fill_other_lines(changes.get("other_date"), changes.get("other_until"))
         if any(k in changes for k in ("goodNo", "quantity", "grossWeight")):
             cap = "Order Cargo"
             self.ensure_pane(cap, lambda: self.grid(cap))

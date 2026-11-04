@@ -5,7 +5,7 @@ so these tables are shared; a client's own Admin > Addresses mapping still wins 
 import re
 
 # ── goods ───────────────────────────────────────────────────────────────────────────────────────────────────────
-GOODS = {"BAGS": "G0018", "BAG": "G0018", "BIG BAGS": "G0039", "BIG BAG": "G0039", "BIGBAGS": "G0039", "BIGBAG": "G0039"}
+GOODS = {"BAGS": "G0018", "BAG": "G0018", "BIG BAGS": "G0039", "BIG BAG": "G0039", "BIGBAGS": "G0039", "BIGBAG": "G0039" }
 
 
 def goods_code(name: str | None) -> str | None:

@@ -8,7 +8,9 @@ what format, with which separator and time — in these module-level functions. 
                   containerType, closingDatetime, carrier, depotOutFrom, vgmClosingDate, sealNo, tractionOrder,
                   containerSubtype (see GENERAL_FIELDS / CONSTANT_FIELDS)
     lines(v)    -> {"DEPOT OUT" | "UNLOAD" | "DEPOT IN": {"ref", "bookedFrom", "bookedUntil"}}   the Lines to fill and
-                  their texts; a line not returned is left alone. The TMS address no. is added here, from the depot
+                  their texts; a line not returned is left alone. The TMS address no. is added here, from the depot.
+                  "OTHERS": {"bookedFrom", "bookedUntil"} = every other row of the grid (DROP OFF, PICK UP, UNLOAD WH
+                  ... however many TMS generated) gets those booked dates
     cargo(v)    -> {"goodNo", "quantity", "grossWeight"}   the Order Cargo line (optional; no goodNo = no cargo line)
     remarks(v)  -> text                    the Order Remarks line (optional)
     SAME_FOR_ALL = ["container_type"]      container values that must be identical, because the first order is copied
@@ -33,6 +35,8 @@ SAME_ON_ALL_ORDERS = {"containerType"}                         # never corrected
 CONSTANT_FIELDS = {"tractionOrder", "containerSubtype"}         # typed on the first order only
 LINE_KEYS = {"DEPOT OUT": "depot_out", "DEPOT IN": "depot_in"}  # Lines action -> key in the payload
 LINE_ACTIONS = ("DEPOT OUT", "UNLOAD", "DEPOT IN")              # the Lines rows, top to bottom (UNLOAD has no depot of its own)
+OTHER_LINES = "OTHERS"        # every Lines row that is not DEPOT OUT / DEPOT IN (TMS may generate any number of them,
+                              # even with the same action code twice): lines(v) gives them only booked dates
 LINE_VALUES = {"ref", "bookedFrom", "bookedUntil"}
 CARGO_VALUES = {"goodNo", "quantity", "grossWeight"}
 DEFAULT_SAME_FOR_ALL = ("container_type",)                      # the flow copies the first order, so the type is shared
@@ -87,7 +91,7 @@ class Spec:
         bad = sorted(set(self.general(empty)) - set(GENERAL_FIELDS) - CONSTANT_FIELDS - {"sealNo"})
         if self.lines:
             got = self.lines(empty)
-            bad += sorted(a for a in got if a not in LINE_ACTIONS)
+            bad += sorted(a for a in got if a not in (*LINE_ACTIONS, OTHER_LINES))
             bad += sorted(v for vals in got.values() for v in set(vals) - LINE_VALUES)
         if self.cargo:
             bad += sorted(set(self.cargo(empty)) - CARGO_VALUES)
@@ -182,6 +186,9 @@ def build_job(payload: dict, files: list, flow) -> dict:
                       "bookedFrom": vals.get("bookedFrom", ""), "bookedUntil": vals.get("bookedUntil", ""),
                       "closing": ""})
     data["lines"] = lines
+    other = {k: _text(v) for k, v in (wanted.get(OTHER_LINES) or {}).items()}
+    data["otherLines"] = ({"bookedFrom": other.get("bookedFrom", ""), "bookedUntil": other.get("bookedUntil", "")}
+                          if other.get("bookedFrom") or other.get("bookedUntil") else {})
 
     # ── Order Cargo: one line, from the first container ──
     cg = cargo_of(first)
@@ -204,7 +211,9 @@ def build_job(payload: dict, files: list, flow) -> dict:
         out_no, out_ref, out_booked = depot(c, "depot_out", "DEPOT OUT")
         in_no, in_ref, in_booked = depot(c, "depot_in", "DEPOT IN")
         gc, cg = general(c), cargo_of(c)
+        oth = lines_of(c).get(OTHER_LINES) or {}
         return {"containerNo": c["container_no"],
+                "otherFrom": _text(oth.get("bookedFrom")), "otherUntil": _text(oth.get("bookedUntil")),
                 "sealNo": gc.get("sealNo", ""),
                 # the General fields this order must end with; the flow corrects those that differ from the first order
                 "general": {f: gc[f] for f in GENERAL_FIELDS if f in gc and f not in SAME_ON_ALL_ORDERS},
