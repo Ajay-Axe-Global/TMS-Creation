@@ -2,23 +2,24 @@
 Sabic — what is typed into TMS, and in which format. The functions below decide the final text of every field; where
 it is typed and the browser work are shared by every customer (helpers/order_builder.py, helpers/tms_creation.py).
 `v` is one container's values (see helpers/order_builder.py); a field that is not returned stays empty.
-Started from Emvia's functions; the only difference so far is that the vessel name is not filled.
+Started from Emvia's functions. Differences: Customer Ref. is the client ref alone, Booking Ref. is BL no./ITOS no.,
+dates are typed without a time, and every Lines row between Depot Out and Depot In gets the Depot Out date ("OTHERS").
 """
 from helpers import client_page
-from helpers.convert import date_time, join, tms_date
+from helpers.convert import date_time, join
 
 bp = client_page.make_blueprint("sabic")
 
-TIME = "10:00"                      # every date of the General tab is typed with this time: 25/11/2026 10:00
+TIME = ""                           # Sabic types dates only (25/11/2026), no time; set e.g. "10:00" to add one everywhere
 
 
 def general(v):
     """The General tab."""
     return {
-        # Customer Ref. = client ref/ITOS no., Booking Ref. = BL no./client ref
-        "customerRef": join("/", v.client_ref, v.itos_no),
-        "bookingRef": join("/", v.bl_number, v.client_ref),
-        # no vesselName: Sabic does not fill the vessel name
+        # Customer Ref. = the client ref, Booking Ref. = BL no./ITOS no.
+        "customerRef": v.client_ref,
+        "bookingRef": join("/", v.bl_number, v.itos_no),
+        "vesselName": v.vessel_name,
         "countryOrigin": v.country_of_origin,
         "countryDest": v.country_of_destination,
         "containerType": v.container_type,
@@ -32,12 +33,14 @@ def general(v):
 
 
 def lines(v):
-    """The Lines grid: Depot Out and Depot In carry their reference and booked date, Unload the Depot Out date."""
+    """The Lines grid: Depot Out and Depot In carry their address, reference and booked date; every row between them
+    (however many TMS generates) gets the Depot Out date."""
     out, into = v.depot_out, v.depot_in
     return {
-        "DEPOT OUT": {"ref": out.reference, "bookedFrom": tms_date(out.date), "bookedUntil": tms_date(out.date)},
-        "UNLOAD": {"bookedFrom": tms_date(out.date), "bookedUntil": tms_date(out.date)},
-        "DEPOT IN": {"ref": into.reference, "bookedFrom": tms_date(into.date)},
+        "DEPOT OUT": {"ref": out.reference, "bookedFrom": date_time(out.date, TIME), "bookedUntil": date_time(out.date, TIME)},
+        "DEPOT IN": {"ref": into.reference, "bookedFrom": date_time(into.date, TIME)},
+        # every other row TMS generates (UNLOAD WH, PICK UP, DROP OFF ...) gets the Depot Out date as its booked date
+        "OTHERS": {"bookedFrom": date_time(out.date, TIME), "bookedUntil": date_time(out.date, TIME)},
     }
 
 
