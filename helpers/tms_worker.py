@@ -164,7 +164,7 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
         job.stage = "card"
         db.commit()
         flow = flows.require(job.payload["client"]["client_name"])      # clients/<customer>/<customer>.py
-        result = order_builder.create_order(page, frame, job.payload, emit, flow)
+        result = order_builder.create_order(db, page, frame, job.payload, emit, flow)
         _store_flow_log(db, job, result.pop("log", []))
         warnings = result.pop("warnings", [])
         _store_result(db, job, result)

@@ -1,20 +1,8 @@
 """
-The codes TMS wants where the source has a name: goods and depot addresses (carriers live in the carrier table). Every customer uses the same TMS,
-so these tables are shared; a client's own Admin > Addresses mapping still wins over the depot defaults below.
+The codes TMS wants where the source has a name: depot addresses (carriers live in the carrier table, goods in the
+goods table — helpers/carriers.py, helpers/goods.py). Every customer uses the same TMS, so this table is shared;
+a client's own Admin > Addresses mapping still wins over the depot defaults below.
 """
-import re
-
-# ── goods ───────────────────────────────────────────────────────────────────────────────────────────────────────
-GOODS = {"BAGS": "G0018", "BAG": "G0018", "BIG BAGS": "G0039", "BIG BAG": "G0039", "BIGBAGS": "G0039", "BIGBAG": "G0039" }
-
-
-def goods_code(name: str | None) -> str | None:
-    """TMS goods code for the source's goods name (BAGS -> G0018, BIG BAGS -> G0039); None when it has none."""
-    key = re.sub(r"\s+", " ", (name or "").strip().upper())
-    if re.fullmatch(r"G\d{4}", key):                    # already a TMS code
-        return key
-    return GOODS.get(key)
-
 
 # ── depot addresses ─────────────────────────────────────────────────────────────────────────────────────────────
 # TMS address no. -> the names it is known by: the TMS location name first, then the other spellings the source uses.

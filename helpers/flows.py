@@ -31,7 +31,7 @@ def require(client_name: str):
     return flow
 
 
-def problems(client_name: str, payload: dict) -> list[str]:
+def problems(session, client_name: str, payload: dict) -> list[str]:
     """Reasons the customer's flow cannot handle this shipment (none when it has no flow to ask)."""
     flow = load(client_name)
-    return order_builder.check_payload(payload, flow) if flow else []
+    return order_builder.check_payload(session, payload, flow) if flow else []

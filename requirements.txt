@@ -6,3 +6,4 @@ cryptography==44.0.0
 waitress==3.0.2
 playwright==1.62.0   # TMS browser login (helpers/tms_login.py); run `playwright install chromium` once
 psycopg2-binary==2.9.10   # shipment source sync (database/source_sync.py)
+psutil==6.1.0   # memory-aware admission gate (helpers/browser_pool.py); optional — the gate no-ops if missing

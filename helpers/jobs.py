@@ -129,7 +129,7 @@ def build_payload(session, client: Client, shipment: Shipment):
         else:
             problems.append(f'its {f.doc_type} file "{f.original_name}" is missing on the server — upload it again')
     # the customer's map may refuse what it cannot send; better here than half-created in TMS
-    problems.extend(flows.problems(client.client_name, payload))
+    problems.extend(flows.problems(session, client.client_name, payload))
     return payload, problems
 
 
@@ -225,7 +225,7 @@ _CLAIM_SQL = text("""
                AND (j.next_retry_at IS NULL OR j.next_retry_at <= :now)
                AND NOT EXISTS (SELECT 1 FROM tms_jobs r WHERE r.user_id = j.user_id AND r.status = 'running')
              ORDER BY j.priority DESC,
-                      (SELECT COALESCE(MAX(x.started_at), '') FROM tms_jobs x WHERE x.user_id = j.user_id) ASC,
+                      (SELECT MAX(x.started_at) FROM tms_jobs x WHERE x.user_id = j.user_id) ASC NULLS FIRST,
                       j.id ASC
              LIMIT 1)
        AND status = 'queued'
@@ -236,7 +236,7 @@ _CLAIM_SQL = text("""
 def claim_next(session) -> int | None:
     """Atomically take the next runnable job (one statement, so two workers can never
     claim the same job). Returns its id, or None if nothing is runnable right now."""
-    now = datetime.datetime.utcnow().isoformat(sep=" ")
+    now = datetime.datetime.utcnow()
     row = session.execute(_CLAIM_SQL, {"now": now}).fetchone()
     session.commit()
     if row is None:
