@@ -60,7 +60,6 @@
 
       <div class="panel full" style="margin-bottom:20px">
         <h2>Orders created — last 14 days</h2>
-        <p class="panel-sub">TMS orders (one per container) by the day the run finished · "Success rate" is shipments completed without a problem</p>
         <div class="filter-row">
           <select id="chart-filter-client">
             <option value="">All clients</option>
@@ -75,7 +74,6 @@
       <div class="grid-2">
         <div class="panel">
           <h2>Orders by client</h2>
-          <p class="panel-sub">total orders per client for the selected period</p>
           <div class="filter-row">
             <select id="client-bar-period">
               <option value="today">Today</option>
@@ -97,7 +95,6 @@
 
         <div class="panel">
           <h2>Orders by client — share</h2>
-          <p class="panel-sub">each slice is a client's share of the orders in the selected period</p>
           <div class="filter-row">
             <select id="client-pie-period">
               <option value="today">Today</option>
@@ -121,7 +118,6 @@
 
       <div class="panel full">
         <h2>Orders by user · client</h2>
-        <p class="panel-sub">click a row for the individual shipments behind that count</p>
         <div class="filter-row">
           <div class="period-group" id="period-group">
             <button type="button" class="period-seg active" data-period="today">Today</button>
@@ -162,7 +158,6 @@
         </div>
         <div id="productivity-section" style="display:none">
           <h2 style="margin-top:20px">Productivity — orders per team member</h2>
-          <p class="panel-sub">reflects the filters above</p>
           <div class="pie-row">
             <svg id="productivity-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
             <div class="pie-legend" id="productivity-pie-legend"></div>
@@ -319,12 +314,10 @@
 
     <!-- ═══════════════════ ADDRESSES TAB ═══════════════════ -->
     <div class="tab-panel" id="tab-addresses">
-      <!-- row 1: depot address form | its statistics -->
+      <!-- row 1: depot address form | goods form -->
       <div class="grid-2">
         <div class="panel">
           <h2 id="address-form-title">Add depot address</h2>
-          <p class="panel-sub">the source gives a depot name; TMS needs its address no. One list for every client,
-            used for both depot in and depot out. Names match ignoring case, spacing and punctuation.</p>
           <label for="address-name">Depot name (as written in the source)</label>
           <input id="address-name" placeholder="e.g. DR DEPORT" autocomplete="off" />
           <label for="address-no">TMS address no.</label>
@@ -334,35 +327,36 @@
           <div class="msg" id="address-msg"></div>
         </div>
 
-        <div class="stat-col">
-          <div class="stat-tile">
-            <div class="label">Mapped depots</div>
-            <div class="value" id="addr-stat-mapped">—</div>
-          </div>
-          <div class="stat-tile">
-            <div class="label">Used by shipments but not mapped</div>
-            <div class="value" id="addr-stat-unmapped">—</div>
-          </div>
+        <div class="panel">
+          <h2 id="goods-form-title">Add goods</h2>
+          <label for="goods-names">Names in the source (comma separated)</label>
+          <input id="goods-names" placeholder="e.g. BAGS, BAG" autocomplete="off" />
+          <label for="goods-code">TMS goods code</label>
+          <input id="goods-code" placeholder="e.g. G0018" autocomplete="off" />
+          <button class="primary" id="add-goods-btn">Add goods</button>
+          <button class="primary secondary" id="cancel-goods-btn" style="display:none">Cancel edit</button>
+          <div class="msg" id="goods-msg"></div>
         </div>
       </div>
 
-      <!-- row 2: carrier form | its statistics -->
+      <!-- row 2: carrier form | mapped depots + carriers -->
       <div class="grid-2">
         <div class="panel">
           <h2 id="carrier-form-title">Add carrier</h2>
-          <p class="panel-sub">a shipping line: the shortcut typed into TMS, and the ways the source writes its name.
-            Carriers listed here are matched in the shipment's carrier text, and appear in the trade lane dropdown
-            of Admin &gt; Clients. A carrier that is not listed is sent to TMS empty and uses the client's ALL lane.</p>
-          <label for="carrier-code">TMS carrier shortcut</label>
-          <input id="carrier-code" placeholder="e.g. MSK" autocomplete="off" />
           <label for="carrier-names">Names in the source (comma separated)</label>
           <input id="carrier-names" placeholder="e.g. MAERSK, MAEU" autocomplete="off" />
+          <label for="carrier-code">TMS carrier shortcut</label>
+          <input id="carrier-code" placeholder="e.g. MSK" autocomplete="off" />
           <button class="primary" id="add-carrier-btn">Add carrier</button>
           <button class="primary secondary" id="cancel-carrier-btn" style="display:none">Cancel edit</button>
           <div class="msg" id="carrier-msg"></div>
         </div>
 
         <div class="stat-col">
+          <div class="stat-tile">
+            <div class="label">Mapped depots</div>
+            <div class="value" id="addr-stat-mapped">—</div>
+          </div>
           <div class="stat-tile">
             <div class="label">Carriers</div>
             <div class="value" id="carrier-stat-total">—</div>
@@ -375,8 +369,6 @@
         <div class="panel">
           <h2 style="margin-bottom:12px">Depot addresses</h2>
           <div id="unmapped-panel" class="unmapped" style="display:none">
-            <p class="panel-sub">Not mapped yet — shipments using these depots cannot be sent until each has an address no.
-              Click one to add it.</p>
             <div class="grant-chips" id="unmapped-list"></div>
           </div>
           <div class="table-scroll">
@@ -409,14 +401,29 @@
           </div>
         </div>
       </div>
+
+      <!-- row 4: the goods list -->
+      <div class="panel full">
+        <h2 style="margin-bottom:12px">Goods</h2>
+        <div class="table-scroll">
+          <table id="goods-table">
+            <thead>
+              <tr>
+                <th>TMS code</th>
+                <th>Names in the source</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ═══════════════════ VIDEOS TAB ═══════════════════ -->
     <div class="tab-panel" id="tab-videos">
       <div class="panel full">
         <h2 style="margin-bottom:6px">Job videos</h2>
-        <p class="panel-sub">The browser recording of every run. A run that created its TMS order(s) is deleted by itself after 24 hours; failed, partial and
-          created-with-warnings runs stay here until you delete them.</p>
         <div style="display:flex; gap:12px; align-items:center; margin-bottom:14px; flex-wrap:wrap">
           <span id="videos-summary" class="panel-sub" style="margin:0"></span>
           <button class="primary secondary" id="videos-expired-btn">Delete expired now</button>

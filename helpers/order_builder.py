@@ -25,7 +25,8 @@ many, which depot is on which line, and what each copied order must be corrected
     check_payload(payload, flow) -> [reasons]   asked when the user clicks Create, BEFORE anything is queued
     create_order(page, frame, payload, log, flow)   called by the worker with the empty new-order card open
 """
-from helpers import tms_codes, tms_creation
+from helpers import goods as goods_svc
+from helpers import tms_creation
 from helpers.flow_errors import FlowFailed
 
 # The General-tab fields a customer's general() may return (plus "sealNo", and the CONSTANT_FIELDS typed once)
@@ -101,19 +102,20 @@ class Spec:
             raise FlowSpecError(f"{self.name}: unknown name(s) returned: {', '.join(bad)}")
 
 
-def check_payload(payload: dict, flow) -> list[str]:
+def check_payload(session, payload: dict, flow) -> list[str]:
     """Reasons this shipment cannot be created. The first order is filled from the first container and copied, so
     what is in SAME_FOR_ALL (the container type — a General field) must be shared. Depot Out / In, goods,
     quantity and weight may differ per container: they are corrected in each order after the copy."""
     spec = Spec(flow)
     problems = []
     containers = payload["containers"]
+    goods_code_of = goods_svc.matcher(session)
     if any(not c["container_no"] for c in containers):
         problems.append("a container has no container number")
     for c in containers:
-        if c["goods"] and not tms_codes.goods_code(c["goods"]):
-            problems.append(f'container {c["container_no"]}: goods "{c["goods"]}" has no TMS goods code '
-                            "(known: BAGS, BIG BAGS)")
+        if c["goods"] and not goods_code_of(c["goods"]):
+            problems.append(f'container {c["container_no"]}: goods "{c["goods"]}" has no TMS goods code — '
+                            "ask an administrator to add it in Admin → Goods")
     for field in spec.same_for_all:
         if len({c[field] for c in containers}) > 1:
             label = field.replace("_", " ")
@@ -122,13 +124,14 @@ def check_payload(payload: dict, flow) -> list[str]:
     return problems
 
 
-def build_job(payload: dict, files: list, flow) -> dict:
+def build_job(session, payload: dict, files: list, flow) -> dict:
     """The dict helpers/tms_creation.run() takes: {"data", "containers", "calcRevenues"}."""
     spec = Spec(flow)
     s, client = payload["shipment"], payload["client"]
     containers = payload["containers"]
     first = containers[0]
     single = len(containers) == 1
+    goods_code_of = goods_svc.matcher(session)
 
     def view(c) -> Values:
         """What the customer's functions see for this container: its own values, else the shipment's."""
@@ -136,7 +139,7 @@ def build_job(payload: dict, files: list, flow) -> dict:
             v = c.get(name)
             return v if v is not None else s.get(name)
         values = {n: ("" if value_of(n) is None else value_of(n)) for n in VALUE_NAMES}
-        values["goods_code"] = tms_codes.goods_code(c.get("goods")) or ""
+        values["goods_code"] = goods_code_of(c.get("goods")) or ""
         values["depot_out"] = Depot(c.get("depot_out") or s.get("depot_out"))
         values["depot_in"] = Depot(c.get("depot_in") or s.get("depot_in"))
         return Values(values)
@@ -226,9 +229,9 @@ def build_job(payload: dict, files: list, flow) -> dict:
     return {"data": data, "containers": [container(c) for c in containers], "calcRevenues": True}
 
 
-def create_order(page, frame, payload, log, flow):
+def create_order(session, page, frame, payload, log, flow):
     """What the worker calls for every customer: check, build, run the shared Playwright flow."""
-    problems = check_payload(payload, flow)
+    problems = check_payload(session, payload, flow)
     if problems:
         raise FlowFailed("Not sent to TMS: " + "; ".join(problems))
-    return tms_creation.create_order(page, frame, build_job(payload, payload.get("files") or [], flow), log)
+    return tms_creation.create_order(page, frame, build_job(session, payload, payload.get("files") or [], flow), log)

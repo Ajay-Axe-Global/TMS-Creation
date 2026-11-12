@@ -19,12 +19,18 @@ The browser pool: a few long-lived Chromium browsers, each offering a few job sl
 * Graceful stop: stop claiming, let running jobs finish for TMS_SHUTDOWN_GRACE seconds. What is still running
   stays "running" and helpers/jobs.recover_interrupted re-queues (stage "start") or fails it on the next start.
 * Back-pressure: when the oldest queued job is older than TMS_QUEUE_ALERT_MINUTES a warning is logged.
+* Admission gate: a new browser is not opened while system memory (or the RAM disk at TMS_PROFILE_DIR, if
+  set) is low, even if a slot is nominally free — the dispatcher waits instead of pushing the box into swap.
+* TMS_PROFILE_DIR: where each browser's disposable cache/profile dir is created (ideal: a RAM disk — this
+  data is deleted on every close() and nothing in it needs to survive). Unset, or not writable, falls back
+  to the system temp dir.
 
 Why each slot runs its own Playwright: the sync API is bound to the thread that started it, so one browser cannot
 be driven from several threads. The pool starts Chromium itself (with a DevTools port) and every slot thread
 connects to it over CDP, so several jobs can share one browser process.
 """
 import datetime
+import glob
 import json
 import logging
 import os
@@ -42,6 +48,11 @@ from helpers import jobs, tms_login
 
 logger = logging.getLogger("browser_pool")
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 
 def _int(name: str, default: int) -> int:
     try:
@@ -55,6 +66,37 @@ def _float(name: str, default: float) -> float:
         return float(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _resolve_profile_root() -> str | None:
+    """TMS_PROFILE_DIR (e.g. a RAM disk) if set and writable; None (= the system temp dir) otherwise,
+    so a RAM disk that failed to mount degrades to disk-backed profiles instead of taking the pool down."""
+    root = os.getenv("TMS_PROFILE_DIR")
+    if not root:
+        return None
+    if os.path.isdir(root) and os.access(root, os.W_OK):
+        return root
+    logger.warning("TMS_PROFILE_DIR %s not usable — falling back to the system temp dir.", root)
+    return None
+
+
+def _sweep_orphans(root: str) -> None:
+    """tms-browser-* dirs a crash left behind (close() never ran to clean them up), swept before
+    anything launches so a small fixed-size RAM disk never fills up across restarts."""
+    for d in glob.glob(os.path.join(root, "tms-browser-*")):
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _memory_ok(min_free_gb: float = 2.0) -> bool:
+    if psutil is None:
+        return True
+    return psutil.virtual_memory().available / (1024 ** 3) >= min_free_gb
+
+
+def _ramdisk_ok(root: str | None, reserve_mb: int = 200) -> bool:
+    if not root:
+        return True
+    return shutil.disk_usage(root).free / (1024 ** 2) >= reserve_mb
 
 
 class PoolBrowser:
@@ -116,6 +158,7 @@ class BrowserPool(threading.Thread):
         self.grace = _float("TMS_SHUTDOWN_GRACE", 600)
         self.poll = _float("TMS_POLL_SECONDS", 2)
         self.alert_age = _float("TMS_QUEUE_ALERT_MINUTES", 15) * 60
+        self.profile_root = _resolve_profile_root()
         self.browsers: list[PoolBrowser] = []
         self.lock = threading.RLock()
         self.stopping = threading.Event()
@@ -127,6 +170,8 @@ class BrowserPool(threading.Thread):
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self):
+        if self.profile_root:
+            _sweep_orphans(self.profile_root)
         super().start()
         self.monitor.start()
 
@@ -163,7 +208,7 @@ class BrowserPool(threading.Thread):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.close()
-        profile = tempfile.mkdtemp(prefix="tms-browser-")
+        profile = tempfile.mkdtemp(prefix="tms-browser-", dir=self.profile_root)
         args = [self._executable(), f"--remote-debugging-port={port}", f"--user-data-dir={profile}",
                 "--no-first-run", "--no-default-browser-check", "--disable-blink-features=AutomationControlled",
                 "--window-size=1600,900"]
@@ -217,8 +262,8 @@ class BrowserPool(threading.Thread):
                 full = True
             else:
                 full = False
-        if full:
-            self.stopping.wait(0.5)                    # every slot of every browser is busy
+        if full or not _memory_ok() or not _ramdisk_ok(self.profile_root):
+            self.stopping.wait(0.5)       # every slot busy, or the box is low on memory/RAM-disk headroom
             return
         db = SessionLocal()
         try:

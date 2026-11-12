@@ -85,6 +85,31 @@ def carriers_delete(session, actor, carrier_id):
     return service.delete_carrier(session, actor, carrier_id)
 
 
+# Goods
+@bp.route("/goods", methods=["GET"])
+@api
+def goods_list(session, actor):
+    return service.list_goods(session)
+
+
+@bp.route("/goods", methods=["POST"])
+@api
+def goods_create(session, actor):
+    return service.create_goods(session, actor, body())
+
+
+@bp.route("/goods/<int:goods_id>", methods=["PUT"])
+@api
+def goods_update(session, actor, goods_id):
+    return service.update_goods(session, actor, goods_id, body())
+
+
+@bp.route("/goods/<int:goods_id>", methods=["DELETE"])
+@api
+def goods_delete(session, actor, goods_id):
+    return service.delete_goods(session, actor, goods_id)
+
+
 # Depot addresses
 @bp.route("/addresses", methods=["GET"])
 @api

@@ -6,12 +6,14 @@ and commits its own writes. routes/admin_routes.py only translates HTTP <-> this
 from sqlalchemy import func
 
 from database.models import (
-    AuditLog, Carrier, Client, ClientTradeLane, DepotAddress, SourceLookup, TmsCredential, User, UserClientAccess,
+    AuditLog, Carrier, Client, ClientTradeLane, DepotAddress, Goods, SourceLookup, TmsCredential, User,
+    UserClientAccess,
 )
 from helpers.convert import slugify
 from helpers import addresses as address_svc
 from helpers import audit as audit_svc
 from helpers import carriers as carrier_svc
+from helpers import goods as goods_svc
 from helpers import tradelanes
 from helpers.crypto_utils import encrypt_secret
 from helpers.jwt_utils import hash_password
@@ -228,6 +230,64 @@ def delete_carrier(session, actor_id, carrier_id):
     session.delete(c)
     session.commit()
     return {"deleted": carrier_id}
+
+
+# ── Goods (one list for all clients: source goods name -> TMS goods code) ───────────────────
+
+def goods_dict(g: Goods) -> dict:
+    # the code is always one of the names the source can use, so it is listed too
+    return {"id": g.id, "code": g.code, "names": ", ".join(goods_svc.split_names(f"{g.code}, {g.names}"))}
+
+
+def list_goods(session):
+    return [goods_dict(g) for g in session.query(Goods).order_by(Goods.code)]
+
+
+def _goods_names(session, names, code, exclude_id=None) -> str:
+    """The cleaned spellings; a spelling already used by another goods code would make the match ambiguous."""
+    cleaned = goods_svc.split_names(names)
+    others = {}
+    for o in session.query(Goods).all():
+        if o.id != exclude_id:
+            for n in [o.code, *goods_svc.split_names(o.names)]:
+                others.setdefault(n, o.code)
+    for n in [code, *cleaned]:
+        if n in others:
+            raise ServiceError(f'"{n}" already belongs to goods code {others[n]}', 409)
+    return ", ".join(n for n in cleaned if n != code)
+
+
+def create_goods(session, actor_id, data):
+    code = " ".join(_need(data.get("code"), "TMS goods code").upper().split())
+    if len(code) > 20 or "," in code:
+        raise ServiceError("The TMS goods code must be short, e.g. G0018")
+    g = Goods(code=code, names=_goods_names(session, data.get("names"), code))
+    session.add(g)
+    audit_svc.audit(session, actor_id, "goods.create", code, g.names)
+    session.commit()
+    return goods_dict(g)
+
+
+def update_goods(session, actor_id, goods_id, data):
+    """Only the spellings change: the code is what jobs look up."""
+    g = session.get(Goods, goods_id)
+    if not g:
+        raise ServiceError("Goods not found", 404)
+    names = _goods_names(session, data.get("names"), g.code, exclude_id=g.id)
+    audit_svc.audit(session, actor_id, "goods.update", g.code, f"{g.names!r} => {names!r}")
+    g.names = names
+    session.commit()
+    return goods_dict(g)
+
+
+def delete_goods(session, actor_id, goods_id):
+    g = session.get(Goods, goods_id)
+    if not g:
+        raise ServiceError("Goods not found", 404)
+    audit_svc.audit(session, actor_id, "goods.delete", g.code)
+    session.delete(g)
+    session.commit()
+    return {"deleted": goods_id}
 
 
 # ── Depot addresses (one list for all clients: source depot name -> TMS address no.) ────────

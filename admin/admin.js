@@ -431,6 +431,72 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // Goods (source goods name -> TMS goods code) — shares the addresses/carriers tab
+  // ═══════════════════════════════════════════════════════════════════
+  let goodsCache = [];
+  let editingGoodsId = null;
+
+  function resetGoodsForm() {
+    editingGoodsId = null;
+    $("goods-form-title").textContent = "Add goods";
+    $("add-goods-btn").textContent = "Add goods";
+    $("cancel-goods-btn").style.display = "none";
+    $("goods-code").disabled = false;
+    $("goods-code").value = $("goods-names").value = "";
+  }
+  $("cancel-goods-btn").addEventListener("click", resetGoodsForm);
+
+  function startEditGoods(id) {
+    const g = goodsCache.find(x => x.id === id);
+    if (!g) return;
+    editingGoodsId = id;
+    $("goods-form-title").textContent = `Edit goods: ${g.code}`;
+    $("add-goods-btn").textContent = "Update goods";
+    $("cancel-goods-btn").style.display = "block";
+    $("goods-code").value = g.code;
+    $("goods-code").disabled = true;              // jobs look up by the code
+    $("goods-names").value = g.names;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  $("add-goods-btn").addEventListener("click", async () => {
+    const msg = $("goods-msg");
+    const isEdit = editingGoodsId !== null;
+    try {
+      const data = await api(isEdit ? `/api/admin/goods/${editingGoodsId}` : "/api/admin/goods",
+        { method: isEdit ? "PUT" : "POST",
+          body: { code: $("goods-code").value.trim(), names: $("goods-names").value.trim() } });
+      showMsg(msg, isEdit ? `Updated ${data.code}.` : `Added ${data.code}.`, true);
+      resetGoodsForm();
+      await loadGoodsTab();
+    } catch (e) { showMsg(msg, e.message, false); }
+  });
+
+  async function loadGoodsTab() {
+    goodsCache = await api("/api/admin/goods");
+    document.querySelector("#goods-table tbody").innerHTML = goodsCache.length
+      ? goodsCache.map(g => `
+        <tr>
+          <td class="mono">${esc(g.code)}</td>
+          <td>${esc(g.names) || "—"}</td>
+          <td><div class="row-actions">
+            <button class="icon" title="Edit" aria-label="Edit" data-edit-goods="${g.id}">${ICON_EDIT}</button>
+            <button class="icon danger" title="Delete" aria-label="Delete" data-delete-goods="${g.id}">${ICON_DELETE}</button>
+          </div></td>
+        </tr>`).join("")
+      : emptyRow(3, "No goods yet.");
+    document.querySelectorAll("[data-edit-goods]").forEach(b =>
+      b.addEventListener("click", () => startEditGoods(+b.dataset.editGoods)));
+    document.querySelectorAll("[data-delete-goods]").forEach(b => b.addEventListener("click", async () => {
+      const g = goodsCache.find(x => x.id === +b.dataset.deleteGoods);
+      if (!await ui.confirm({ title: `Delete goods ${g.code}?`, danger: true, confirmText: "Delete",
+        text: "Shipments using this goods name will no longer have a TMS goods code." })) return;
+      try { await api(`/api/admin/goods/${g.id}`, { method: "DELETE" }); await loadGoodsTab(); }
+      catch (e) { ui.toast(e.message, "error"); }
+    }));
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // Addresses tab (one list for all clients)
   // ═══════════════════════════════════════════════════════════════════
   let addressesCache = [];
@@ -471,11 +537,11 @@
   });
 
   async function loadAddressesTab() {
-    loadCarriersTab();                       // the carriers share this tab
+    loadCarriersTab();                       // the carriers and goods share this tab
+    loadGoodsTab();
     const data = await api("/api/admin/addresses");
     addressesCache = data.addresses;
     $("addr-stat-mapped").textContent = data.addresses.length.toLocaleString();
-    $("addr-stat-unmapped").textContent = data.unmapped.length.toLocaleString();
 
     $("unmapped-panel").style.display = data.unmapped.length ? "block" : "none";
     $("unmapped-list").innerHTML = data.unmapped.map((u, i) =>

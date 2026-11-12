@@ -79,6 +79,16 @@ class Carrier(Base):
     names = Column(String(500), nullable=False, default="")     # source spellings, comma separated: "MAERSK, MAEU"
 
 
+class Goods(Base):
+    """The TMS goods code and the source spellings that map to it ("BAGS", "BAG" -> G0018). database/seed.py holds
+    the starting list; Admin > Goods adds a new code or changes its spellings — a goods name with none is refused."""
+    __tablename__ = "goods"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), unique=True, nullable=False)      # "G0018" — the TMS goods code
+    names = Column(String(500), nullable=False, default="")     # source spellings, comma separated: "BAGS, BAG"
+
+
 class SourceLookup(Base):
     """The customer names and warehouse names exactly as the source database spells them. They feed the suggestions
     in Admin > Clients > Add client, so a client is created with a name + warehouse the sync can find in the source
@@ -370,7 +380,7 @@ class JobLog(Base):
     seq = Column(Integer, nullable=False)
     container_no = Column(String(40), nullable=True)       # NULL = shipment-level step
     section = Column(String(40), nullable=True)
-    field = Column(String(120), nullable=True)
+    field = Column(String(500), nullable=True)
     value = Column(String(500), nullable=True)
     actual = Column(String(500), nullable=True)
     status = Column(String(500), nullable=True)
