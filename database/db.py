@@ -1,10 +1,13 @@
+import logging
 import os
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.models import Base
+
+logger = logging.getLogger("database")
 
 # The app's own database (users, clients, shipments, jobs, credentials) — separate from the
 # source database (SRC_PG_* in source_sync.py), which is the external, read-only shipment feed.
@@ -46,11 +49,36 @@ def _check_schema() -> None:
     if problems:
         raise SchemaMismatch(
             "The app database does not match database/models.py (" + "; ".join(problems) + "). "
-            "There are no migrations yet — drop the affected table(s) (or the whole database) so they are "
-            "created fresh, then start again.")
+            "New nullable columns are added automatically; this change is not one of them — alter the table "
+            "by hand (or drop it so it is created fresh), then start again.")
+
+
+def _add_new_columns() -> list[str]:
+    """create_all() never alters an existing table. A column added to the models later that may be empty (nullable,
+    no default) is safe to add in place: existing rows just get NULL. Those are added here; anything else (a
+    required column, a type change, a removed column) is still left to _check_schema() to refuse."""
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    added = []
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in tables:
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have or not col.nullable or col.primary_key or col.server_default is not None:
+                    continue
+                kind = col.type.compile(dialect=engine.dialect)
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN IF NOT EXISTS "{col.name}" {kind}'))
+                added.append(f"{table.name}.{col.name}")
+    if added:
+        logger.info("Added new column(s) to the app database: %s", ", ".join(added))
+    return added
 
 
 def init_db() -> None:
-    """Create every table (all columns, keys and constraints) that does not exist yet, then verify the rest."""
+    """Create every table (all columns, keys and constraints) that does not exist yet, add new nullable columns to
+    existing tables, then verify the rest."""
     Base.metadata.create_all(bind=engine)
+    _add_new_columns()
     _check_schema()

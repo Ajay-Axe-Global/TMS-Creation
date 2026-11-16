@@ -32,7 +32,7 @@ VIEWS = Path(__file__).resolve().parent.parent / "views"      # the one page eve
 
 # What the page shows per container, because the source may give each container of a BL its own: a container's own
 # value, else the shipment's (and `own` lists the ones that are really its own)
-PER_CONTAINER_VIEW = ("client_ref", "carrier", "vessel_name", "depot_out_from", "vgm_closing_date", "depot_out_reference",
+PER_CONTAINER_VIEW = ("client_ref", "tms_customer_ref", "carrier", "vessel_name", "depot_out_from", "vgm_closing_date", "depot_out_reference",
                       "depot_out_date", "depot_in_date", "remarks")
 
 
@@ -130,6 +130,7 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                     "id": s.id,
                     "itos_no": s.itos_no,
                     "client_ref": s.client_ref,
+                    "tms_customer_ref": s.tms_customer_ref,
                     "carrier": s.carrier,
                     "customer_no": tradelanes.route_for(client, code_of(s.carrier))[0],
                     "tradelane_no": tradelanes.route_for(client, code_of(s.carrier))[1],

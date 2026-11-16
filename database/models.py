@@ -244,6 +244,7 @@ class Shipment(Base):
     synced_at = Column(DateTime, nullable=True)
 
     client_ref = Column(String(120), nullable=True)
+    tms_customer_ref = Column(String(120), nullable=True)   # source tms_customer_ref, offered to the mapping
     bl_number = Column(String(120), nullable=False)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
@@ -309,6 +310,7 @@ class ShipmentContainer(Base):
     # ATA, client ref ...). The shipment keeps the first container's value; a container whose value differs keeps its
     # own here, empty = the shipment's. The TMS order of that container is corrected to it.
     client_ref = Column(String(120), nullable=True)
+    tms_customer_ref = Column(String(120), nullable=True)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
     country_of_origin = Column(String(10), nullable=True)

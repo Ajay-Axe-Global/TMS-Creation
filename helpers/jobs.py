@@ -50,7 +50,7 @@ def _depot(session, name, reference, date, problems, label):
 
 
 # General values a container may carry on its own when they differ from the shipment's (the same names as the columns)
-OWN_VALUES = ("client_ref", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
+OWN_VALUES = ("client_ref", "tms_customer_ref", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
               "depot_out_from", "vgm_closing_date", "remarks")
 
 
@@ -102,6 +102,7 @@ def build_payload(session, client: Client, shipment: Shipment):
                    "tms_tradelane_no": lane},
         "shipment": {
             "id": shipment.id, "itos_no": shipment.itos_no, "client_ref": shipment.client_ref,
+            "tms_customer_ref": shipment.tms_customer_ref,
             "bl_number": shipment.bl_number, "carrier": shipment.carrier, "carrier_code": code_of(shipment.carrier), "vessel_name": shipment.vessel_name,
             "country_of_origin": shipment.country_of_origin,
             "country_of_destination": shipment.country_of_destination,

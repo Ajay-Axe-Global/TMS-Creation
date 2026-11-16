@@ -12,7 +12,8 @@ Source column -> our column
                                       WHERE (client_name, warehouse) matches one of them (case / outer spaces ignored),
                                       so nothing else is transferred. No client is ever created here.
     bl_number                      -> Shipment.bl_number (the group key)           itos_no -> Shipment.itos_no
-    client_ref, carrier, vessel_name, country_of_origin, country_of_destination, closing_date -> same name
+    client_ref, carrier, vessel_name, country_of_origin, country_of_destination, closing_date,
+    tms_customer_ref               -> same name
     ata_date                       -> Shipment.depot_out_from
     pick_up_until                  -> Shipment.vgm_closing_date
     Every value below can differ between the containers of a BL (the source says it per row): the shipment keeps the
@@ -52,7 +53,7 @@ logger = logging.getLogger("source_sync")
 COLUMNS = ["client_name", "warehouse", "itos_no", "count", "container_no", "container_type", "seal_no", "goods", "qty",
            "gross_weight", "client_ref", "bl_number", "carrier", "vessel_name", "country_of_origin",
            "country_of_destination", "pick_up_from", "pick_up_until", "closing_date", "depot_out_address",
-           "pickup_quay", "empty_return_reference", "depot_in_address", "ata_date"]
+           "pickup_quay", "empty_return_reference", "depot_in_address", "ata_date", "tms_customer_ref"]
 
 # shipment column <- source column (the same value on every row of a BL; the first non-empty one wins)
 SHIPMENT_MAP = {
@@ -61,7 +62,7 @@ SHIPMENT_MAP = {
     "closing_date": "closing_date", "depot_out_from": "ata_date", "vgm_closing_date": "pick_up_until",
     "depot_out_date": "pick_up_from", "depot_in_date": "pick_up_from",
     "depot_in_reference": "empty_return_reference", "depot_out_address": "depot_out_address",
-    "depot_in_address": "depot_in_address",
+    "depot_in_address": "depot_in_address", "tms_customer_ref": "tms_customer_ref",
 }
 CONTAINER_FIELDS = ["container_type", "seal_no", "goods", "qty", "gross_weight"]
 # Everything in SHIPMENT_MAP (except the ITOS number) plus the two derived values may differ per container of a BL:
