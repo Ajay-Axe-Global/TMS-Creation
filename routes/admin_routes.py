@@ -2,7 +2,7 @@ from functools import wraps
 
 from flask import Blueprint, abort, g, jsonify, request, send_file
 
-from admin import dashboard, service
+from admin import dashboard, mapping, service
 from database import source_sync
 from database.db import SessionLocal
 from database.models import JobVideo
@@ -51,6 +51,61 @@ def clients_create(session, actor):
 @api
 def clients_update(session, actor, client_id):
     return service.update_client(session, actor, client_id, body())
+
+
+# Field mapping (engine/): the dropdown catalogue, and one client's template — draft, publish, copy from another client
+@bp.route("/mapping/catalog", methods=["GET"])
+@api
+def mapping_catalog(session, actor):
+    return mapping.catalog_payload()
+
+
+@bp.route("/clients/<int:client_id>/mapping", methods=["GET"])
+@api
+def mapping_state(session, actor, client_id):
+    return mapping.state(session, client_id)
+
+
+@bp.route("/clients/<int:client_id>/mapping", methods=["PUT"])
+@api
+def mapping_save(session, actor, client_id):
+    return mapping.save_draft(session, actor, client_id, body())
+
+
+@bp.route("/clients/<int:client_id>/mapping/publish", methods=["POST"])
+@api
+def mapping_publish(session, actor, client_id):
+    return mapping.publish(session, actor, client_id)
+
+
+@bp.route("/clients/<int:client_id>/mapping/unpublish", methods=["POST"])
+@api
+def mapping_unpublish(session, actor, client_id):
+    return mapping.unpublish(session, actor, client_id)
+
+
+@bp.route("/clients/<int:client_id>/mapping/restore", methods=["POST"])
+@api
+def mapping_restore(session, actor, client_id):
+    return mapping.restore(session, actor, client_id, body())
+
+
+@bp.route("/clients/<int:client_id>/mapping/copy", methods=["POST"])
+@api
+def mapping_copy(session, actor, client_id):
+    return mapping.copy_from(session, actor, client_id, body())
+
+
+@bp.route("/clients/<int:client_id>/mapping/starter", methods=["POST"])
+@api
+def mapping_starter(session, actor, client_id):
+    return mapping.load_starter(session, actor, client_id)
+
+
+@bp.route("/clients/<int:client_id>/mapping/preview", methods=["POST"])
+@api
+def mapping_preview(session, actor, client_id):
+    return mapping.preview(session, actor, client_id, body())
 
 
 # Source names (customer / warehouse suggestions for the Add client form)

@@ -34,11 +34,58 @@
       document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
       btn.classList.add("active");
       $(`tab-${btn.dataset.tab}`).classList.add("active");
+      // the page header follows the sidebar (data-title / data-sub on each nav button)
+      $("page-title").textContent = $("page-crumb").textContent = btn.dataset.title || btn.textContent.trim();
+      setMenu(false);
+      window.scrollTo({ top: 0 });
       loaders[btn.dataset.tab]().catch(err => ui.toast(err.message, "error"));
     });
   });
+  // small screens: the sidebar slides in over the page
+  const isPhone = () => window.matchMedia("(max-width: 860px)").matches;
+  function setMenu(open) {
+    $("sidebar").classList.toggle("open", open);
+    $("scrim").classList.toggle("show", open);
+  }
+  function setCollapsed(on) {
+    document.body.classList.toggle("nav-collapsed", on);
+    try { localStorage.setItem("tms_nav_collapsed", on ? "1" : "0"); } catch (e) { /* private mode: not remembered */ }
+  }
+  try { if (localStorage.getItem("tms_nav_collapsed") === "1") document.body.classList.add("nav-collapsed"); } catch (e) { /* ignore */ }
+  $("menu-btn").addEventListener("click", () => {
+    if (isPhone()) setMenu(!$("sidebar").classList.contains("open"));
+    else setCollapsed(!document.body.classList.contains("nav-collapsed"));
+  });
+  $("scrim").addEventListener("click", () => setMenu(false));
   ui.themeToggle($("theme-btn"));
+  // Master data: the lists sit behind two tabs (depots + carriers | goods)
+  document.querySelectorAll(".seg-btn[data-dtab]").forEach(btn => btn.addEventListener("click", () => {
+    document.querySelectorAll(".seg-btn[data-dtab]").forEach(b => b.classList.toggle("active", b === btn));
+    document.querySelectorAll("[data-dpane]").forEach(p => { p.hidden = p.dataset.dpane !== btn.dataset.dtab; });
+  }));
   $("logout-btn").addEventListener("click", () => Auth.logout());
+  $("header-logout-btn").addEventListener("click", () => Auth.logout());
+  // every password field gets an eye button that shows / hides what was typed
+  document.querySelectorAll('input[type="password"]').forEach(inp => {
+    const wrap = document.createElement("div");
+    wrap.className = "pw-wrap";
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    const eye = document.createElement("button");
+    eye.type = "button";
+    eye.className = "pw-eye";
+    eye.title = "Show password";
+    eye.setAttribute("aria-label", "Show password");
+    eye.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    eye.addEventListener("click", () => {
+      const show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      eye.title = show ? "Hide password" : "Show password";
+      eye.setAttribute("aria-label", eye.title);
+      eye.innerHTML = show ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.2A10.6 10.6 0 0 1 12 4c6.5 0 10 8 10 8a17.6 17.6 0 0 1-3.2 4.3M6.6 6.6A17.7 17.7 0 0 0 2 12s3.5 8 10 8a9.9 9.9 0 0 0 5.4-1.6"/><path d="M14.1 14.1a3 3 0 0 1-4.2-4.2M2 2l20 20"/></svg>` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
+    });
+    wrap.appendChild(eye);
+  });
 
   // ═══════════════════════════════════════════════════════════════════
   // Shared data
@@ -79,8 +126,16 @@
     renderGrantChips();
   });
 
+  function showUserTab(name) {
+    document.querySelectorAll("#user-tabs [data-utab]").forEach(b => b.classList.toggle("active", b.dataset.utab === name));
+    document.querySelectorAll("[data-upane]").forEach(p => { p.hidden = p.dataset.upane !== name; });
+  }
+  document.querySelectorAll("#user-tabs [data-utab]").forEach(b => b.addEventListener("click", () => showUserTab(b.dataset.utab)));
   const toggleUserOnly = () => {
-    $("user-only-block").style.display = $("user-role").value === "admin" ? "none" : "block";
+    const admin = $("user-role").value === "admin";
+    $("user-only-block").style.display = admin ? "none" : "block";
+    document.querySelectorAll('#user-tabs [data-utab="tms"], #user-tabs [data-utab="access"]').forEach(b => { b.style.display = admin ? "none" : ""; });
+    if (admin) showUserTab("account");
   };
   $("user-role").addEventListener("change", toggleUserOnly);
 
@@ -97,6 +152,7 @@
       .forEach(id => $(id).value = "");
     $("user-role").value = "user";
     toggleUserOnly();
+    showUserTab("account");
     renderGrantChips();
   }
 
@@ -118,9 +174,10 @@
     $("user-tms-password").placeholder = u.tms ? "Leave blank to keep current password" : "";
     $("user-role").value = u.role;
     toggleUserOnly();
+    showUserTab("account");
     renderGrantChips();
-    document.querySelector('[data-tab="users"]').click();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    document.querySelector('[data-tab="addresses"]').click();
+    setTimeout(() => $("user-form-panel").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   }
   $("cancel-edit-btn").addEventListener("click", resetUserForm);
 
@@ -132,13 +189,22 @@
     return `${esc(u.tms.username)} ${badge(text, cls)}`;
   }
 
+  const tmsState = u => u.role === "admin" ? "n/a" : !u.tms ? "not_set" : u.tms.status === "connected" ? "connected" : "attention";
   function filteredUsers() {
     const clientId = parseInt($("users-filter-client").value, 10);
-    return usersCache.filter(u => !clientId || (u.role !== "admin" && (u.grants || []).some(g => g.client_id === clientId)));
+    const q = $("users-search").value.trim().toLowerCase();
+    const role = $("users-filter-role").value, status = $("users-filter-status").value, tms = $("users-filter-tms").value;
+    return usersCache.filter(u =>
+      (!clientId || (u.role !== "admin" && (u.grants || []).some(g => g.client_id === clientId))) &&
+      (!role || u.role === role) &&
+      (!status || (status === "active") === !!u.is_active) &&
+      (!tms || tmsState(u) === tms) &&
+      (!q || [u.name, u.username, u.tms && u.tms.username].some(v => (v || "").toLowerCase().includes(q))));
   }
 
   function renderUsersTable() {
     const rows = filteredUsers();
+    $("users-count").textContent = rows.length === usersCache.length ? `${rows.length}` : `${rows.length} of ${usersCache.length}`;
     const tbody = document.querySelector("#users-table tbody");
     if (!rows.length) { tbody.innerHTML = emptyRow(7, "No users match these filters."); return; }
     tbody.innerHTML = rows.map(u => `
@@ -177,7 +243,18 @@
       } catch (e) { ui.toast(e.message, "error"); }
     }));
   }
-  $("users-filter-client").addEventListener("change", renderUsersTable);
+  ["users-filter-client", "users-filter-role", "users-filter-status", "users-filter-tms"]
+    .forEach(id => $(id).addEventListener("change", renderUsersTable));
+  $("users-search").addEventListener("input", renderUsersTable);
+  $("users-clear-btn").addEventListener("click", () => {
+    ["users-search", "users-filter-client", "users-filter-role", "users-filter-status", "users-filter-tms"].forEach(id => $(id).value = "");
+    renderUsersTable();
+  });
+  $("users-add-btn").addEventListener("click", () => {
+    resetUserForm();
+    document.querySelector('[data-tab="addresses"]').click();
+    setTimeout(() => { $("user-form-panel").scrollIntoView({ behavior: "smooth", block: "start" }); $("user-name").focus(); }, 50);
+  });
 
   async function refreshUsers() {
     usersCache = await api("/api/admin/users");
@@ -187,6 +264,8 @@
   function updateUserStatCards() {
     $("stat-total-users").textContent = usersCache.length.toLocaleString();
     $("stat-total-clients").textContent = clientsCache.length.toLocaleString();
+    $("stat-active-users").textContent = usersCache.filter(u => u.is_active).length.toLocaleString();
+    $("stat-tms-issues").textContent = usersCache.filter(u => u.is_active && ["not_set", "attention"].includes(tmsState(u))).length.toLocaleString();
   }
 
   $("add-user-btn").addEventListener("click", async () => {
@@ -203,7 +282,7 @@
       tms_password: role === "user" ? $("user-tms-password").value || undefined : undefined,
     };
     if (!isEdit && !payload.password) return showMsg(msg, "Password is required for a new user", false);
-    if (role === "user" && !payload.client_ids.length) return showMsg(msg, "Give the user access to at least one client", false);
+    if (role === "user" && !payload.client_ids.length) { showUserTab("access"); return showMsg(msg, "Give the user access to at least one client", false); }
     if (role === "user" && payload.tms_password && !payload.tms_username)
       return showMsg(msg, "Enter the TMS username that goes with that password", false);
 
@@ -232,28 +311,35 @@
     $("add-client-btn").textContent = "Add client";
     $("cancel-client-btn").style.display = "none";
     $("client-name").disabled = false;
-    ["client-name", "client-warehouse", "client-customer-no"].forEach(id => $(id).value = "");
-    setLaneRows([{ carrier: "ALL", tradelane_no: "" }]);
+    ["client-name", "client-warehouse"].forEach(id => $(id).value = "");
+    setLaneRows([{ carrier: "ALL", tradelane_no: "", customer_no: "" }]);
   }
 
   let laneCarriers = ["ALL"];
-  function addLaneRow(carrier = "ALL", no = "") {
+  function addLaneRow(carrier = "ALL", no = "", customerNo = "") {
     const row = document.createElement("div");
     row.className = "lane-row";
     row.innerHTML = `<div><select class="lane-carrier">${laneCarriers.map(k =>
       `<option value="${esc(k)}"${k === carrier ? " selected" : ""}>${esc(k)}</option>`).join("")}</select></div>
-      <div><input class="lane-no" placeholder="e.g. TLVMT25-100245" value="${esc(no)}" /></div>
-      <div><button type="button" class="danger lane-del">Remove</button></div>`;
+      <div><input class="lane-customer" value="${esc(customerNo || "")}" /></div>
+      <div><input class="lane-no" placeholder="TLVMT25-100245" value="${esc(no)}" /></div>
+      <div><button type="button" class="danger lane-del" title="Remove this row" aria-label="Remove this row">Remove</button></div>`;
     row.querySelector(".lane-del").addEventListener("click", () => row.remove());
+    // the ALL row holds the client's customer no.; any other carrier only needs one when it differs
+    const sel = row.querySelector(".lane-carrier"), cust = row.querySelector(".lane-customer");
+    const hint = () => { cust.placeholder = sel.value === "ALL" ? "K0014043" : "Same as ALL"; };
+    sel.addEventListener("change", hint);
+    hint();
     $("tradelane-rows").appendChild(row);
   }
   function setLaneRows(rows) {
     $("tradelane-rows").innerHTML = "";
-    rows.forEach(r => addLaneRow(r.carrier, r.tradelane_no));
+    rows.forEach(r => addLaneRow(r.carrier, r.tradelane_no, r.customer_no));
   }
   function laneRows() {
     return [...document.querySelectorAll("#tradelane-rows .lane-row")].map(r => ({
-      carrier: r.querySelector(".lane-carrier").value, tradelane_no: r.querySelector(".lane-no").value.trim() }));
+      carrier: r.querySelector(".lane-carrier").value, tradelane_no: r.querySelector(".lane-no").value.trim(),
+      customer_no: r.querySelector(".lane-customer").value.trim() }));
   }
   $("add-lane-btn").addEventListener("click", () => addLaneRow(laneRows().some(r => r.carrier === "ALL") ? laneCarriers[1] : "ALL"));
   $("cancel-client-btn").addEventListener("click", resetClientForm);
@@ -268,28 +354,36 @@
     $("client-name").value = c.client_name;
     $("client-name").disabled = true;             // the client name names the flow code folder; the warehouse can be corrected
     $("client-warehouse").value = c.warehouse || "";
-    $("client-customer-no").value = c.tms_customer_no || "";
-    setLaneRows(c.tradelanes.length ? c.tradelanes : [{ carrier: "ALL", tradelane_no: "" }]);
+    // the client's own customer no. is shown on its ALL row
+    const rows = c.tradelanes.map(t => t.carrier === "ALL" ? { ...t, customer_no: t.customer_no || c.tms_customer_no || "" } : t);
+    setLaneRows(rows.length ? rows : [{ carrier: "ALL", tradelane_no: "", customer_no: c.tms_customer_no || "" }]);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   $("add-client-btn").addEventListener("click", async () => {
     const msg = $("client-msg");
+    const isEdit = editingClientId !== null;
+    const lanes = laneRows();
+    const all = lanes.find(r => r.carrier === "ALL");
     const body = {
       client_name: $("client-name").value.trim(),
       warehouse: $("client-warehouse").value.trim(),
-      tms_customer_no: $("client-customer-no").value.trim(),
-      tradelanes: laneRows(),
+      // the ALL row's customer no. is the client's own; a carrier row keeps one only when it differs
+      tradelanes: lanes.map(r => r.carrier === "ALL" ? { ...r, customer_no: "" } : r),
     };
-    const isEdit = editingClientId !== null;
+    if (all) body.tms_customer_no = all.customer_no;
+    else if (!isEdit) body.tms_customer_no = "";
     try {
       const data = await api(isEdit ? `/api/admin/clients/${editingClientId}` : "/api/admin/clients",
         { method: isEdit ? "PUT" : "POST", body });
-      showMsg(msg, isEdit ? `Updated client "${data.name}".` : `Added client "${data.name}".`, true);
+      showMsg(msg, isEdit ? `Updated client "${data.name}".` : `Added client "${data.name}".` +
+        " Now map its TMS fields below — or copy the template of another client.", true);
       resetClientForm();
       await loadClientsTab();
+      if (!isEdit) MappingEditor.open(data.id);       // onboarding: straight on to the client's field mapping
     } catch (e) { showMsg(msg, e.message, false); }
   });
+  document.addEventListener("mapping-changed", () => loadClientsTab().catch(() => {}));   // publish / unpublish: refresh the table
 
   function renderClientsTables() {
     $("client-stat-total").textContent = clientsCache.length.toLocaleString();
@@ -300,19 +394,25 @@
         <td>${esc(c.client_name)} <span class="mono" style="color:var(--text-muted)">flow: ${esc(c.flow_slug)}</span></td>
         <td>${c.warehouse ? esc(c.warehouse) : badge("not set", "inactive")}</td>
         <td class="mono">${esc(c.tms_customer_no || "—")}</td>
-        <td class="mono">${c.tradelanes.length ? c.tradelanes.map(t => `${esc(t.carrier)}: ${esc(t.tradelane_no)}`).join("<br>") : "—"}</td>
+        <td class="mono">${c.tradelanes.length ? c.tradelanes.map(t => `${esc(t.carrier)}: ${t.customer_no ? esc(t.customer_no) + " / " : ""}${esc(t.tradelane_no)}`).join("<br>") : "—"}</td>
+        <td>${c.flow_source === "mapping" ? badge(`template v${c.mapping_version}`, "status-success")
+        : c.flow_source === "file" ? badge("client file")
+        : badge("not mapped", "inactive")}</td>
         <td class="num">${c.user_count}</td>
         <td>${c.ready ? badge(c.is_active ? "ready" : "inactive", c.is_active ? "status-success" : "inactive")
-        : badge(c.warehouse ? "needs customer no. + trade lane" : "needs warehouse", "inactive")}</td>
+        : badge(!c.warehouse ? "needs warehouse" : !c.flow_source ? "needs a field mapping" : "needs customer no. + trade lane", "inactive")}</td>
         <td><div class="row-actions">
+          <button title="Map the TMS fields of this client" data-map-client="${c.id}">Mapping</button>
           <button class="icon" title="Edit" aria-label="Edit" data-edit-client="${c.id}">${ICON_EDIT}</button>
           ${c.is_active ? `<button class="icon danger" title="Deactivate" aria-label="Deactivate" data-toggle-client="${c.id}">${ICON_OFF}</button>`
         : `<button class="icon reactivate" title="Reactivate" aria-label="Reactivate" data-toggle-client="${c.id}">${ICON_ON}</button>`}
         </div></td>
-      </tr>`).join("") : emptyRow(7, "No clients yet.");
+      </tr>`).join("") : emptyRow(8, "No clients yet.");
 
     document.querySelectorAll("[data-edit-client]").forEach(b =>
       b.addEventListener("click", () => startEditClient(+b.dataset.editClient)));
+    document.querySelectorAll("[data-map-client]").forEach(b =>
+      b.addEventListener("click", () => MappingEditor.open(+b.dataset.mapClient)));
     document.querySelectorAll("[data-toggle-client]").forEach(b => b.addEventListener("click", async () => {
       const c = clientsCache.find(x => x.id === +b.dataset.toggleClient);
       try { await api(`/api/admin/clients/${c.id}`, { method: "PUT", body: { is_active: !c.is_active } }); await loadClientsTab(); }
@@ -539,6 +639,11 @@
   async function loadAddressesTab() {
     loadCarriersTab();                       // the carriers and goods share this tab
     loadGoodsTab();
+    loadCatalog().then(() => {               // ...and so does the user form (its client list)
+      const keep = $("user-client").value;
+      fillClientSelects();
+      if (keep) $("user-client").value = keep;
+    }).catch(() => {});
     const data = await api("/api/admin/addresses");
     addressesCache = data.addresses;
     $("addr-stat-mapped").textContent = data.addresses.length.toLocaleString();
@@ -928,6 +1033,9 @@
     try {
       const me = await api("/api/auth/me");
       if (me.role !== "admin") { location.href = "/dashboard"; return; }
+      const who = me.name || me.username || "Administrator";
+      $("me-name").textContent = who;
+      $("me-avatar").textContent = who.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
       resetUserForm();
       await loadDashboardTab();
     } catch (e) {

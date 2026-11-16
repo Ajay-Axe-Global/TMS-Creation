@@ -71,19 +71,22 @@ def _own_depot(session, shipment, c, which, problems):
                   f"Depot {which} of container {c.container_no}")
 
 
-def _tradelane(client: Client, shipment: Shipment, code_of, problems: list) -> str | None:
-    """The trade lane for the shipment's carrier. It is chosen once, on the first order, and the copies keep it — so
-    containers whose own carriers need different lanes cannot go in one shipment."""
-    lane = tradelanes.lane_for(client, code_of(shipment.carrier))
+def _route(client: Client, shipment: Shipment, code_of, problems: list) -> tuple[str | None, str | None]:
+    """(customer no., trade lane) for the shipment's carrier. Both are chosen once, on the first order, and the copies
+    keep them — so containers whose own carriers need another customer no. or lane cannot go in one shipment."""
+    customer, lane = tradelanes.route_for(client, code_of(shipment.carrier))
     if not lane:
         problems.append(f"{client.name} has no trade lane for carrier {shipment.carrier or '(none)'} "
                         "and no ALL lane — add it in Admin > Clients")
-        return None
+        return None, None
+    if not customer:
+        problems.append(f"{client.name} has no TMS customer no. for carrier {shipment.carrier or '(none)'} — "
+                        "add it in Admin > Clients")
     for c in shipment.containers:
-        if c.carrier and tradelanes.lane_for(client, code_of(c.carrier)) != lane:
-            problems.append(f"container {c.container_no} is on carrier {c.carrier}, which has another trade lane than "
-                            f"the shipment's — the lane is chosen once per shipment")
-    return lane
+        if c.carrier and tradelanes.route_for(client, code_of(c.carrier)) != (customer, lane):
+            problems.append(f"container {c.container_no} is on carrier {c.carrier}, which has another customer no. or "
+                            f"trade lane than the shipment's — they are chosen once per shipment")
+    return customer, lane
 
 
 def build_payload(session, client: Client, shipment: Shipment):
@@ -92,10 +95,10 @@ def build_payload(session, client: Client, shipment: Shipment):
     if not shipment.containers:
         problems.append("it has no containers")
     code_of = carrier_svc.matcher(session)             # source carrier text -> TMS shortcut, from the carrier table
-    lane = _tradelane(client, shipment, code_of, problems)
+    customer, lane = _route(client, shipment, code_of, problems)
     payload = {
         "client": {"id": client.id, "name": client.name, "client_name": client.client_name,
-                   "warehouse": client.warehouse, "tms_customer_no": client.tms_customer_no,
+                   "warehouse": client.warehouse, "tms_customer_no": customer,
                    "tms_tradelane_no": lane},
         "shipment": {
             "id": shipment.id, "itos_no": shipment.itos_no, "client_ref": shipment.client_ref,
@@ -128,8 +131,11 @@ def build_payload(session, client: Client, shipment: Shipment):
                                      "size": f.size, "doc_type": f.doc_type})
         else:
             problems.append(f'its {f.doc_type} file "{f.original_name}" is missing on the server — upload it again')
-    # the customer's map may refuse what it cannot send; better here than half-created in TMS
-    problems.extend(flows.problems(session, client.client_name, payload))
+    # Which source decides this client's field text (a published mapping, or its client file): kept in the job, so
+    # publishing another mapping later never changes a job that is already queued.
+    payload["flow"] = flows.source_of(session, client)
+    # the client's flow may refuse what it cannot send; better here than half-created in TMS
+    problems.extend(flows.problems(session, client, payload))
     return payload, problems
 
 
@@ -168,7 +174,7 @@ def enqueue(session, user_id: int, client: Client, shipment_ids) -> dict:
         raise JobError("No TMS login is set for your account — ask an administrator to add it.")
     if cred.status == "invalid":
         raise JobError("TMS rejected your stored password — ask an administrator to update it.")
-    if not client.tms_customer_no or not client.tradelanes:
+    if not tradelanes.has_customer_no(client) or not client.tradelanes:
         raise JobError(f"{client.name} has no TMS customer no. / trade lane yet — ask an administrator.")
 
     batch_id = str(uuid.uuid4())

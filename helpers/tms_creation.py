@@ -33,10 +33,21 @@ import re
 import time
 from pathlib import Path
 
+from engine import catalog
 from helpers import tms_nav
 from helpers.flow_errors import FlowFailed
 
 logger = logging.getLogger("tms_creation")
+
+# A read of an element (text, value, attribute) that has just vanished must fail fast: Playwright's own default is 30 s
+# per call, which turned a pop-up that redrew into a 30 s stall and a stopped run. Reads use READ_MS; every other
+# automatic wait of the order flow is capped at ACTION_TIMEOUT seconds (TMS_ACTION_TIMEOUT, default 15). Waiting for
+# something to APPEAR is done by Creation.until(), which has its own, longer limits.
+READ_MS = 2000
+try:
+    ACTION_TIMEOUT = max(5.0, float(os.environ.get("TMS_ACTION_TIMEOUT", "15")))
+except ValueError:
+    ACTION_TIMEOUT = 15.0
 
 # Seconds to wait for BC to finish making the copies after OK in the Copy Order dialog.
 try:
@@ -92,17 +103,7 @@ REQUIRED = {                                   # Lines check: columns that must 
 }
 # General fields a copied order may have to differ in (data key -> label, field id, how it is typed): the same fields
 # general_tab fills, corrected on the Edit card of an order whose container has its own value
-PER_ORDER_GENERAL = {
-    "customerRef": ("Customer Ref.", "ShortcutReference1Code", {}),
-    "bookingRef": ("Booking Ref.", "ShortcutReference2Code", {}),
-    "vesselName": ("Vessel Name (Import)", "Go4CTR Vessel Name Import", {}),
-    "countryOrigin": ("Country Of Origin", "CountryOfOrigin", {"lookup": True, "vat": True}),
-    "countryDest": ("Country Of Destination", "CountryOfDestination", {"lookup": True, "vat": True}),
-    "closingDatetime": ("Closing Datetime", "Go4CTR Closing DateTime", {"date": True}),
-    "carrier": ("Carrier", "Go4CTR Carrier No", {"lookup": True}),
-    "depotOutFrom": ("Depot Out From", "Go4CTR Depot Out From", {"date": True}),
-    "vgmClosingDate": ("VGM Closing", "Go4CTR VGM Closing", {"date": True}),
-}
+PER_ORDER_GENERAL = {f.key: (f.label, f.control, catalog.fill_options(f)) for f in catalog.general(per_order=True)}
 _BC_MARKERS = ('.ms-nav-edit-control-container, button[aria-label="Add a new filter on a field"], '
                'a[title^="Open record"]')
 _CARD_NO_SELECTORS = (".secondary-row--OKG79b9vwIblz3DS .title--m8MvvpvUuMfMrmvJ",
@@ -121,6 +122,10 @@ class _Stop(Exception):
 class Creation:
     def __init__(self, page, frame, job, log=None):
         self.pg = page
+        try:
+            page.set_default_timeout(int(ACTION_TIMEOUT * 1000))        # no single call may stall for Playwright's 30 s
+        except Exception:
+            pass
         self._frame = frame
         self.job = job
         self.data = job["data"]
@@ -234,7 +239,7 @@ class Creation:
         el.fill("")
         self.wait(1.0)
         el.press_sequentially(value, delay=20)
-        if norm(value) not in norm(el.input_value()):    # still wrong: set it in one go instead (what the JS script does)
+        if norm(value) not in norm(el.input_value(timeout=READ_MS)):    # still wrong: set it in one go instead (what the JS script does)
             el.fill(value)
 
     def tab(self):
@@ -352,7 +357,7 @@ class Creation:
             if inp.count():
                 if inp.evaluate("e => e.tagName") == "SELECT":
                     return (inp.evaluate("e => e.options[e.selectedIndex]?.textContent || ''") or "").strip()
-                return (inp.input_value() or "").strip()
+                return (inp.input_value(timeout=READ_MS) or "").strip()
             return (c.locator(".stringcontrol-read").first.inner_text(timeout=500) or "").replace(" ", " ").strip()
         except Exception:
             return ""
@@ -367,7 +372,14 @@ class Creation:
             except Exception:
                 continue
 
-    def fill(self, label, cn, value, *, lookup=False, date=False, caption=None, vat=False):
+    # Sets a field's value the way the browser's own setter does and tells BC (input + change) — for a combobox whose
+    # typed text BC does not take (Transport Type); the same few lines that worked in the console.
+    _NATIVE_SET_JS = """(e, v) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, v);
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true })); }"""
+
+    def fill(self, label, cn, value, *, lookup=False, date=False, caption=None, vat=False, native=False):
         if not value:
             return
         cap = caption or label
@@ -380,8 +392,18 @@ class Creation:
             return
         try:
             if el.evaluate("e => e.tagName") == "SELECT":
-                el.select_option(label=value)
+                # A fixed list (Traction Order ...): pick the option whose text equals the value, ignoring letter case
+                # ("import" -> "Import"), and fail at once with the real options instead of waiting 15-30 s for a label
+                # that does not exist.
+                labels = el.evaluate("e => [...e.options].map(o => (o.textContent || '').trim())")
+                pick = next((l for l in labels if norm(l) == norm(value)), None)
+                if pick is None:
+                    raise ValueError(f"'{value}' is not one of this field's options: {', '.join(l for l in labels if l)}")
+                el.select_option(label=pick, timeout=4000)
                 self.wait(0.1)
+            elif native:
+                el.evaluate(self._NATIVE_SET_JS, str(value))
+                self.wait(0.3)
             else:
                 self.type_text(el, value)
                 if lookup:
@@ -420,7 +442,7 @@ class Creation:
         if not cust:
             raise _Stop("Customer No. input not found (is the card in edit mode?)")
         self.type_customer(cust, R["customer"])
-        shown = cust.input_value()
+        shown = cust.input_value(timeout=READ_MS)
         if norm(R["customer"]) not in norm(shown):       # never press Enter on a customer that is not the one asked for
             raise _Stop(f"Customer No. field shows '{shown}' instead of '{R['customer']}' — BC did not take the typed value")
         cust.press("Enter")
@@ -439,55 +461,93 @@ class Creation:
 
         lane = R["tradelane"]
 
-        def row():
-            d = self.tradelane_dialog()
-            if not d:
+        # The pop-up is redrawn (or closes itself) while it is read: a row or link found a moment ago can be gone, and
+        # Locator.text_content then waits its default 30 s and raises. Read with a short timeout and treat "gone" as
+        # "not there (yet)" — the callers poll again, or find the pop-up closed.
+        def text_of(a):
+            try:
+                return (a.text_content(timeout=1000) or "").strip()
+            except Exception:
                 return None
-            for r in d.locator("table.ms-nav-grid-data-table tbody tr[role=row]").all():
-                for a in r.locator("td a.stringcontrol-read").all():
-                    if (a.text_content() or "").strip() == lane:
-                        return r
+
+        def row():
+            try:
+                d = self.tradelane_dialog()
+                if not d:
+                    return None
+                for r in d.locator("table.ms-nav-grid-data-table tbody tr[role=row]").all():
+                    for a in r.locator("td a.stringcontrol-read").all():
+                        if text_of(a) == lane:
+                            return r
+            except Exception:
+                pass
             return None
 
         def link():
-            r = row()
-            if not r:
-                return None
-            for a in r.locator("td a.stringcontrol-read").all():
-                if (a.text_content() or "").strip() == lane:
-                    return a
+            try:
+                r = row()
+                if not r:
+                    return None
+                for a in r.locator("td a.stringcontrol-read").all():
+                    if text_of(a) == lane:
+                        return a
+            except Exception:
+                pass
             return None
 
         def selected(r):
-            return bool(r) and (r.get_attribute("aria-selected") == "true"
-                                or "real-current" in (r.get_attribute("class") or ""))
+            return bool(r) and (r.get_attribute("aria-selected", timeout=READ_MS) == "true"
+                                or "real-current" in (r.get_attribute("class", timeout=READ_MS) or ""))
 
         if not self.until(row, 8.0):
             d = self.tradelane_dialog()
             seen = []
             if d:
-                for a in d.locator("table.ms-nav-grid-data-table tbody tr[role=row] td a.stringcontrol-read").all()[:20]:
-                    seen.append((a.text_content() or "").strip())
+                try:
+                    for a in d.locator("table.ms-nav-grid-data-table tbody tr[role=row] td a.stringcontrol-read").all()[:20]:
+                        seen.append(text_of(a) or "")
+                except Exception:
+                    pass
             cust_now = self.field_value("CustomerNo")
             raise _Stop(f"Trade lane row not found: {lane} (Customer No. shows '{cust_now}'; the pop-up lists: {', '.join(seen) or 'nothing'})")
         self.wait(0.5)
+        def lane_in_field():
+            """The order card already shows the chosen trade lane: the choice went through, whatever the pop-up does."""
+            c = self.container("TradeLaneNo")
+            try:
+                return bool(c) and norm(lane) in norm((c.inner_text(timeout=READ_MS) or "") + " " + (
+                    c.locator("input").first.input_value(timeout=READ_MS) if c.locator("input").count() else ""))
+            except Exception:
+                return False
+
+        def popup_gone():
+            return not self.tradelane_dialog() or lane_in_field()
+
         closed = False
         for _ in range(3):
             a = link()
             if not a:
-                closed = bool(self.until(lambda: not self.tradelane_dialog(), 0.5))
+                closed = bool(self.until(popup_gone, 0.5))
                 break
-            a.scroll_into_view_if_needed()
-            a.click()
-            closed = bool(self.until(lambda: not self.tradelane_dialog(), 4.0))
+            # The click that picks the lane can succeed and the pop-up still take several seconds to close (a slow
+            # machine): a second click on a link that is already going away must never be waited for or fail the run.
+            try:
+                a.scroll_into_view_if_needed(timeout=2000)
+                a.click(timeout=3000)
+            except Exception:
+                pass
+            closed = bool(self.until(popup_gone, 10.0))
             if closed:
                 break
         if not closed:
             r = row()
             if r and not selected(r):
                 cell = r.locator("td[role=gridcell] span.stringcontrol-read").first
-                if cell.count():
-                    cell.click()
+                try:
+                    if cell.count():
+                        cell.click(timeout=3000)
+                except Exception:
+                    pass
                 self.until(lambda: selected(row()), 3.0)
                 self.wait(0.8)
             d = self.tradelane_dialog()
@@ -496,14 +556,20 @@ class Creation:
                 ok = d.locator(".ms-nav-actionbar-container button.highlight-btn").first
                 if not ok.count():
                     ok = d.locator(".ms-nav-actionbar-container button", has_text=re.compile(r"^\s*ok\s*$", re.I)).first
-                if ok.count():
-                    ok.click()
-            closed = bool(self.until(lambda: not self.tradelane_dialog(), 3.0))
+                try:
+                    if ok.count():
+                        ok.click(timeout=3000)
+                except Exception:
+                    pass
+            closed = bool(self.until(popup_gone, 5.0))
         if not closed:
             r = row()
-            if r:
-                r.locator("td[role=gridcell] span.stringcontrol-read").first.dblclick()
-            closed = bool(self.until(lambda: not self.tradelane_dialog(), 4.0))
+            try:
+                if r:
+                    r.locator("td[role=gridcell] span.stringcontrol-read").first.dblclick(timeout=3000)
+            except Exception:
+                pass
+            closed = bool(self.until(popup_gone, 6.0))
         if not closed:
             raise _Stop("Tradelane popup could not be closed automatically.")
         self.emit("flow", "✅ Tradelane selected")
@@ -512,10 +578,10 @@ class Creation:
             c = self.container("TradeLaneNo")
             if not c:
                 return False
-            txt = c.inner_text() or ""
+            txt = c.inner_text(timeout=READ_MS) or ""
             try:
                 inp = c.locator("input").first
-                txt += " " + (inp.input_value() if inp.count() else "")
+                txt += " " + (inp.input_value(timeout=READ_MS) if inp.count() else "")
             except Exception:
                 pass
             return norm(lane) in norm(txt)
@@ -564,20 +630,8 @@ class Creation:
     def general_tab(self, R):
         self.head("1) GENERAL")
         self.customer_and_tradelane(R)
-        self.fill("Container Subtype", "Go4CTR codContainerSubType", R.get("containerSubtype"), lookup=True)
-        self.fill("Customer Ref.", "ShortcutReference1Code", R.get("customerRef"))
-        self.fill("Booking Ref.", "ShortcutReference2Code", R.get("bookingRef"))
-        self.fill("Container No.", "Go4CTR codContainerNo", R.get("containerNo"))
-        self.fill("Vessel Name (Import)", "Go4CTR Vessel Name Import", R.get("vesselName"))
-        self.fill("Country Of Origin", "CountryOfOrigin", R.get("countryOrigin"), lookup=True, vat=True)
-        self.fill("Country Of Destination", "CountryOfDestination", R.get("countryDest"), lookup=True, vat=True)
-        self.fill("Container Type", "Go4CTR codContainerType", R.get("containerType"), lookup=True)
-        self.fill("Closing Datetime", "Go4CTR Closing DateTime", R.get("closingDatetime"), date=True)
-        self.fill("Seal No.", "Go4CTR Seal No", R.get("sealNo"))
-        self.fill("Traction Order", "Go4CTR Traction Order", R.get("tractionOrder"))
-        self.fill("Carrier", "Go4CTR Carrier No", R.get("carrier"), lookup=True)
-        self.fill("Depot Out From", "Go4CTR Depot Out From", R.get("depotOutFrom"), date=True)
-        self.fill("VGM Closing", "Go4CTR VGM Closing", R.get("vgmClosingDate"), date=True)
+        for f in catalog.GENERAL:                       # every General field, in the catalogue's order (engine/catalog.py)
+            self.fill(f.label, f.control, R.get(f.key), **catalog.fill_options(f))
         self.close_date_picker()
         self.blur_active()
         self.wait(1.5)
@@ -700,7 +754,7 @@ class Creation:
 
     def is_current(self, caption, key):
         r = self.row_by_key(caption, key)
-        return r is not None and "real-current" in (r.get_attribute("class") or "")
+        return r is not None and "real-current" in (r.get_attribute("class", timeout=READ_MS) or "")
 
     def activate_row(self, caption, key, idx):
         if self.is_current(caption, key):
@@ -724,11 +778,11 @@ class Creation:
             if self.until(lambda: self.is_current(caption, key), 2.0):
                 return True
         # keyboard fallback: arrow up / down from the current row
-        keys = [r.get_attribute("rowkey") for r in self.rows(caption)]
+        keys = [r.get_attribute("rowkey", timeout=READ_MS) for r in self.rows(caption)]
         for _ in range(len(keys)):
             if self.is_current(caption, key):
                 break
-            cur = next((r.get_attribute("rowkey") for r in self.rows(caption) if "real-current" in (r.get_attribute("class") or "")), None)
+            cur = next((r.get_attribute("rowkey", timeout=READ_MS) for r in self.rows(caption) if "real-current" in (r.get_attribute("class", timeout=READ_MS) or "")), None)
             down = key in keys and (cur is None or keys.index(key) > keys.index(cur))
             self.pg.keyboard.press("ArrowDown" if down else "ArrowUp")
             self.wait(0.4)
@@ -744,7 +798,12 @@ class Creation:
             return None
 
     def cell_input(self, caption, key, abbr):
-        idx = self.col_idx(caption, abbr)
+        idx = -1
+        for _ in range(15):                                   # the grid's headers can lag its rows by a moment
+            idx = self.col_idx(caption, abbr)
+            if idx >= 0:
+                break
+            self.wait(0.2)
         if idx < 0:
             raise _Stop(f'Column "{abbr}" not found')
         if not self.activate_row(caption, key, idx):
@@ -805,7 +864,7 @@ class Creation:
             if not row:
                 self.L("Lines", Line=ln["action"], Status="ROW NOT FOUND")
                 continue
-            key = row.get_attribute("rowkey")
+            key = row.get_attribute("rowkey", timeout=READ_MS)
             if norm(ln["action"]) == "unload":
                 # TMS fills the UNLOAD row's address itself; only its booked dates are entered (the Depot Out date)
                 self.type_booked("UNLOAD", cap, key, "From", ln.get("bookedFrom"))
@@ -826,13 +885,25 @@ class Creation:
                            Actual=cur(), Extra="filled by TMS", Status="OK")
                 else:
                     self.step("Lines", ln["action"], cap, key, "Booked DateTime Until", ln["bookedUntil"], settle=0.6)
-            self.step("Lines", ln["action"], cap, key, "Closing Date Time", ln.get("closing"))
+            self.ensure_closing(cap, key, ln["action"])
         other = self.data.get("otherLines") or {}
         if other:
             self.fill_other_lines(other.get("bookedFrom"), other.get("bookedUntil"))
         self.close_date_picker()
         self.blur_active()
         self.wait(1.0)
+
+    def ensure_closing(self, cap, key, action):
+        """TMS copies the General tab's Closing Datetime into the Closing Date Time column of the depot lines. Check it
+        is there; only when it is not (after a short wait) is the General value typed into the cell."""
+        value = self.data.get("closingDatetime")
+        if not value:
+            return
+        shown = lambda: self.cell_text(self.cell(cap, key, "Closing Date Time"))
+        if self.until(lambda: norm(shown()), 1.5):
+            self.L("Lines", Line=action, Field="Closing Date Time", Value=value, Actual=shown(), Extra="filled by TMS", Status="OK")
+        else:
+            self.step("Lines", action, cap, key, "Closing Date Time", value)
 
     def other_rows(self):
         """(rowkey, action code) of every Lines row that is not DEPOT OUT / DEPOT IN, top to bottom. TMS generates them
@@ -843,7 +914,7 @@ class Creation:
         for r in self.rows(cap):
             action = self.cell_text(r.locator("td").nth(i)).strip()
             if action and norm(action) not in ("depot out", "depot in"):
-                found.append((r.get_attribute("rowkey"), action))
+                found.append((r.get_attribute("rowkey", timeout=READ_MS), action))
         return found
 
     def fill_other_lines(self, booked_from, booked_until):
@@ -933,7 +1004,7 @@ class Creation:
             return True
         head = self.f.locator(".ms-nav-band-caption [role=button]").filter(has=self.f.locator('[title="Order Remarks"]')).first
         if head.count():
-            if (head.get_attribute("aria-expanded") or "") == "false":
+            if (head.get_attribute("aria-expanded", timeout=READ_MS) or "") == "false":
                 head.click()
                 self.L("Pane", Field=cap, Status="OK — opened (it was collapsed)")
             return bool(self.until(lambda: self.grid(cap), 10.0))
@@ -948,11 +1019,11 @@ class Creation:
         self.grid(cap).scroll_into_view_if_needed()
         self.wait(0.4)
         rows = self.rows(cap)
-        shown = lambda: self.cell_text(self.cell(cap, rows[0].get_attribute("rowkey"), "Remarks")) if rows else ""
+        shown = lambda: self.cell_text(self.cell(cap, rows[0].get_attribute("rowkey", timeout=READ_MS), "Remarks")) if rows else ""
         how = None
         try:
             if rows:
-                key = rows[0].get_attribute("rowkey")
+                key = rows[0].get_attribute("rowkey", timeout=READ_MS)
                 idx = self.col_idx(cap, "Remarks")
                 if idx >= 0:
                     self.activate_row(cap, key, idx)
@@ -1004,7 +1075,7 @@ class Creation:
             if not row:
                 self.L("Cargo", Line=n + 1, Status="NO EMPTY CARGO ROW")
                 continue
-            key = row.get_attribute("rowkey")
+            key = row.get_attribute("rowkey", timeout=READ_MS)
             val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
             self.step("Cargo", n + 1, cap, key, "Good No.", C.get("goodNo"), lookup=True, settle=0.7,
                       extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
@@ -1026,7 +1097,7 @@ class Creation:
             except Exception:
                 continue
         for b in hits:
-            if b.get_attribute("data-top-level-action") == "true":
+            if b.get_attribute("data-top-level-action", timeout=READ_MS) == "true":
                 return b
         return hits[0] if hits else None
 
@@ -1071,10 +1142,10 @@ class Creation:
             if not d:
                 self.wait(0.3)
                 continue
-            text = re.sub(r"\s+", " ", d.inner_text() or "").strip()[:200]
+            text = re.sub(r"\s+", " ", d.inner_text(timeout=READ_MS) or "").strip()[:200]
             btns = [b for b in d.locator("button").all() if b.is_visible()]
-            pick = next((b for w in ("yes", "ok", "close") for b in btns if norm(b.inner_text()) == w), None)
-            self.L(section, Field="Message", Value=text, Status="Clicked " + (pick.inner_text().strip() if pick else "?"))
+            pick = next((b for w in ("yes", "ok", "close") for b in btns if norm(b.inner_text(timeout=READ_MS)) == w), None)
+            self.L(section, Field="Message", Value=text, Status="Clicked " + (pick.inner_text(timeout=READ_MS).strip() if pick else "?"))
             if pick:
                 pick.click()
             self.until(lambda: not d.is_visible(), 4.0)
@@ -1112,17 +1183,17 @@ class Creation:
         if not form:
             raise _Stop("Copy Order dialog did not open")
         qty = form.locator('[controlname="No Of Copies"] input').first
-        if not qty.count():
+        if not self.until(lambda: qty.count() and qty.is_visible(), 6.0, 0.2):
             raise _Stop("No Of Copies field not found")
         self.type_text(qty, str(copies))
         self.tab()
         self.wait(0.3)
-        if norm(qty.input_value()) != str(copies):
+        if norm(qty.input_value(timeout=READ_MS)) != str(copies):
             qty.fill(str(copies))
             qty.press("Tab")
             self.wait(0.3)
-        self.L("Copy", Field="No Of Copies", Value=str(copies), Actual=qty.input_value(),
-               Status="OK" if norm(qty.input_value()) == str(copies) else "CHECK")
+        self.L("Copy", Field="No Of Copies", Value=str(copies), Actual=qty.input_value(timeout=READ_MS),
+               Status="OK" if norm(qty.input_value(timeout=READ_MS)) == str(copies) else "CHECK")
         # Switch every toggle on. One round-trip tells which are still off; some enable only after another is on,
         # so go round again (max 3 rounds) — but only for the ones still off, with no fixed waiting per toggle.
         toggles = form.locator(".booleancontrol-toggle-switch-container")
@@ -1144,7 +1215,7 @@ class Creation:
             self.L("Copy", Field=st["name"], Value="ON", Actual="ON" if st["on"] else "OFF",
                    Status="OK" if st["on"] else ("DISABLED" if st["disabled"] else "CHECK"))
         ok = form.locator(".ms-nav-actionbar-container button", has_text=re.compile(r"^\s*ok\s*$", re.I)).first
-        if not ok.count():
+        if not self.until(lambda: ok.count() and ok.is_visible(), 6.0, 0.2):
             raise _Stop("OK button not found in Copy Order dialog")
         ok.click()
         # OK is done once the Copy dialog is gone OR the "TMS Copy Orders Overviews" panel is showing: BC opens that
@@ -1276,7 +1347,7 @@ class Creation:
         self.head("9) BACK TO LIST")
         self.blur_active()
         self.wait(0.6)
-        back = self.shown('button[title="Back"]')
+        back = self.until(lambda: self.shown('button[title="Back"]'), 10.0, 0.2)
         if not back:
             raise _Stop('"Back" button not found')
         back.click()
@@ -1332,7 +1403,7 @@ class Creation:
             return self.filter_btn()
         for _ in range(2):
             cap = self.shown("[class*='caption-panel'] button")
-            if cap and re.match(r"^filter list by", (cap.inner_text() or "").strip(), re.I):
+            if cap and re.match(r"^filter list by", (cap.inner_text(timeout=READ_MS) or "").strip(), re.I):
                 cap.click()
                 if self.until(self.filter_btn, 3.0):
                     return self.filter_btn()
@@ -1347,16 +1418,78 @@ class Creation:
                 self.until(self.filter_btn, 3.0)
         return self.filter_btn()
 
+    # The fallback that opens the filter pane through the view menu (what works by hand): open the "All" view
+    # dropdown, choose All, then press "Show filter pane". Three small scripts, one click each.
+    _VIEWS_OPEN_JS = "() => {" + _JS_VIS + r"""
+      const c = [...document.querySelectorAll('[id^="page-views"]')].filter(vis);
+      const b = c.find(e => e.tagName === 'BUTTON') || c[c.length - 1];
+      if (!b) return false;
+      b.click(); return true; }"""
+    _VIEWS_ALL_JS = "() => {" + _JS_VIS + _JS_NORM + r"""
+      const view = [...document.querySelectorAll('[id^="page-views"]')].find(e => e.tagName === 'BUTTON');
+      const o = [...document.querySelectorAll('[role="menuitem"], [role="option"], button')]
+        .find(e => vis(e) && e !== view && norm(e.innerText) === 'all');
+      if (!o) return false;
+      o.click(); return true; }"""
+    _VIEWS_PANE_JS = "() => {" + _JS_VIS + _JS_NORM + r"""
+      const b = [...document.querySelectorAll('button')].find(e => vis(e) &&
+        norm([e.innerText, e.title, e.getAttribute('aria-label'), e.getAttribute('data-automationid')].join(' '))
+          .includes('show filter pane'));
+      if (!b) return false;
+      b.click(); return true; }"""
+
+    def open_filter_via_views(self):
+        """Secondary way to get the filter pane: the "All" view dropdown -> All -> Show filter pane."""
+        try:
+            if not self.f.evaluate(self._VIEWS_OPEN_JS):
+                self.L("Filter", Field="View menu", Status="CHECK — the view dropdown was not found")
+                return False
+            self.wait(0.5)
+            self.f.evaluate(self._VIEWS_ALL_JS)             # "All" may already be selected: the menu then just closes
+            self.wait(1.0)
+            self.f.evaluate(self._VIEWS_PANE_JS)
+            self.until(lambda: self.file_no_filter_input() or self.filter_btn(), 4.0)
+            return True
+        except Exception as e:
+            self.L("Filter", Field="View menu", Status="CHECK — " + str(e).splitlines()[0])
+            return False
+
+    def wait_list_ready(self, timeout=20.0):
+        """After Back, BC draws the order rows first and the toolbar / filter pane a moment later. Wait until any of
+        the things the filter step works with is on screen: the File No. box, "+ Filter...", the "All" view dropdown or
+        the "Filter list by" caption. True when one is."""
+        def ready():
+            return (self.file_no_filter_input() or self.filter_btn() or self.shown('[id^="page-views"]')
+                    or self.shown("[class*='caption-panel'] button"))
+        return bool(self.until(ready, timeout, 0.2))
+
     def pick_file_no_field(self):
-        fb = self.show_filter_button()
-        if not fb:
-            raise _Stop('"+ Filter..." button not found (filter pane closed?)')
-        fb.click()
-        opt = self.until(self.file_no_option, 2.5, 0.1)
-        # only look for the combobox when the option is not already there (it used to be waited for regardless)
-        combo = None if opt else self.until(lambda: self.shown(
-            '.filter-pane-container input[role="combobox"], [class*="filter-pane"] '
-            'input[role="combobox"], input[role="combobox"][aria-expanded="true"]'), 2.5, 0.1)
+        # Primary: "+ Filter..." and the File No. field. Right after Back the list can still be loading and that click
+        # then opens nothing: the secondary way (the view menu) opens the filter pane, then the primary is tried once more.
+        opt = combo = None
+        for attempt in range(2):
+            if attempt:
+                self.L("Filter", Field="File No.", Status="CHECK — the field list did not open; opening the filter pane "
+                                                          "through the view menu")
+                self.wait_list_ready(10.0)
+                self.open_filter_via_views()
+                if self.file_no_filter_input():              # the pane already shows the File No. field
+                    break
+            fb = self.show_filter_button()
+            if not fb:
+                if attempt == 0:
+                    continue                                 # the pane is closed: the view menu opens it
+                raise _Stop('"+ Filter..." button not found (filter pane closed?)')
+            fb.click()
+            opt = self.until(self.file_no_option, 2.5, 0.1)
+            # only look for the combobox when the option is not already there (it used to be waited for regardless)
+            combo = None if opt else self.until(lambda: self.shown(
+                '.filter-pane-container input[role="combobox"], [class*="filter-pane"] '
+                'input[role="combobox"], input[role="combobox"][aria-expanded="true"]'), 2.5, 0.1)
+            if opt or combo or self.file_no_filter_input():
+                break
+            self.pg.keyboard.press("Escape")
+            self.wait(0.5)
         if not opt and combo:
             chev = combo.locator("xpath=ancestor::*[contains(@class,'ms-ComboBox')][1]//button").first
             if chev.count() and chev.is_visible():
@@ -1371,17 +1504,18 @@ class Creation:
             opt.scroll_into_view_if_needed()
             opt.click()
             self.until(self.file_no_filter_input, 3.0)
-        elif combo and norm(combo.input_value()) == "file no.":
+        elif combo and norm(combo.input_value(timeout=READ_MS)) == "file no.":
             combo.press("Enter")
             self.until(self.file_no_filter_input, 3.0)
         inp = self.file_no_filter_input()
         if not inp:
-            seen = [norm(o.inner_text()) for o in self.field_options()]
+            seen = [norm(o.inner_text(timeout=READ_MS)) for o in self.field_options()]
             raise _Stop(f'"File No." not found in the filter field list (saw: {seen})')
         return inp
 
     def filter_by_file_no(self, file_no):
         self.head("10) FILTER LIST BY FILE NO.")
+        self.wait_list_ready()                       # the toolbar and filter pane can lag the rows right after Back
         inp = self.file_no_filter_input() or self.pick_file_no_field()
         inp.click()
         inp.fill(file_no)
@@ -1428,14 +1562,14 @@ class Creation:
         return self.f.locator('[data-pw="edititem"]').first if ok else None
 
     def open_first_row(self):
-        rows = self.list_rows()
+        rows = self.until(self.list_rows, 8.0, 0.2)
         if not rows:
             raise _Stop("No order rows on the list")
         want = getattr(self, "filter_value", "")
         texts = self.list_texts()
         idx = next((i for i, t in enumerate(texts) if want and want in t), 0)       # first row of THIS file
         row = rows[min(idx, len(rows) - 1)]
-        no = (row.locator('a[title^="Open record"]').first.text_content() or "").strip()
+        no = (row.locator('a[title^="Open record"]').first.text_content(timeout=READ_MS) or "").strip()
         self.emit("flow", f"→ opening {no} via ⋮ → Edit")
         row.scroll_into_view_if_needed()
         for i in range(3):
@@ -1446,7 +1580,7 @@ class Creation:
                 row.locator("td").nth(2 if row.locator("td").count() > 2 else 0).click()
                 self.wait(0.4)
                 menu = row.locator('a[title="Show more options"]').first
-            if not menu.count():
+            if not self.until(menu.count, 3.0, 0.2):
                 raise _Stop('"Show more options" (⋮) not found on the first row')
             menu.click(force=(i > 0))
             item = self.until(self.edit_item, 3.0, 0.1)
@@ -1463,7 +1597,7 @@ class Creation:
         hits = []
         for b in self.f.locator('[id$="_next_record_button"]').all()[:10]:
             try:
-                if b.is_visible() and b.is_enabled() and b.get_attribute("aria-disabled") != "true":
+                if b.is_visible() and b.is_enabled() and b.get_attribute("aria-disabled", timeout=READ_MS) != "true":
                     hits.append(b)
             except Exception:
                 continue
@@ -1534,7 +1668,7 @@ class Creation:
         if not g:
             self.L("Check", Status="Lines grid not found")
             return
-        heads = [norm(th.get_attribute("abbr")) for th in g.locator("thead tr:first-child th").all()]
+        heads = [norm(th.get_attribute("abbr", timeout=READ_MS)) for th in g.locator("thead tr:first-child th").all()]
 
         def cell(r, abbr):
             i = heads.index(norm(abbr)) if norm(abbr) in heads else -1
@@ -1651,7 +1785,7 @@ class Creation:
             if not row:
                 self.L("Lines", Line=action, Status="ROW NOT FOUND")
             else:
-                key = row.get_attribute("rowkey")
+                key = row.get_attribute("rowkey", timeout=READ_MS)
                 val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
                 if lookup:
                     self.replace_cell("Lines", action, cap, key, abbr, changes[change], lookup=True,
@@ -1674,7 +1808,7 @@ class Creation:
             if not row:
                 self.L("Cargo", Status="NO CARGO ROW")
             else:
-                key = row.get_attribute("rowkey")
+                key = row.get_attribute("rowkey", timeout=READ_MS)
                 val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
                 if "goodNo" in changes:
                     self.replace_cell("Cargo", 1, cap, key, "Good No.", changes["goodNo"], lookup=True,
@@ -1694,7 +1828,7 @@ class Creation:
     def edit_one(self, i, container):
         self.cur = i + 1
         self.ensure_edit()
-        self.set_field("Container No.", "Go4CTR codContainerNo", container["containerNo"])
+        self.set_field("Container No.", "Go4CTR codContainerNo", container.get("containerNoText") or container["containerNo"])
         self.set_field("Seal No.", "Go4CTR Seal No", container.get("sealNo"))
         changes = self.wanted_changes(container) if len(self.containers) > 1 else {}
         if changes:
@@ -1710,7 +1844,7 @@ class Creation:
                     self.L("Revenues", Status="ERROR: " + str(e).splitlines()[0])
         self.blur_active()
         self.wait(1.0)
-        self.verify_order(container["containerNo"], container.get("sealNo"))
+        self.verify_order(container.get("containerNoText") or container["containerNo"], container.get("sealNo"))
         self.check_lines()
 
     def edit_orders(self, expected):
@@ -1755,7 +1889,8 @@ class Creation:
         # afterwards). Read them back so a value BC dropped or changed is reported, not assumed.
         self.blur_active()
         self.wait(1.0)
-        self.verify_order(self.containers[0]["containerNo"], self.containers[0].get("sealNo"))
+        self.verify_order(self.containers[0].get("containerNoText") or self.containers[0]["containerNo"],
+                          self.containers[0].get("sealNo"))
         self.check_lines()
         fn = self.file_no_now()
         if fn:

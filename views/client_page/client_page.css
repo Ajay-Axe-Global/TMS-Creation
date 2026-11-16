@@ -216,3 +216,13 @@ table.tracking-table th.num { text-align: right; }
   table.tracking-table { width: 100%; }
   table.tracking-table tr.cont td.ship { color: var(--text); }
 }
+
+/* created, with something to double-check: an amber dot on the badge; click it for the note (a page-level bubble) */
+.status-wrap { position: relative; display: inline-flex; }
+.status-dot { position: absolute; top: -4px; right: -5px; width: 11px; height: 11px; padding: 0; border-radius: 50%;
+  border: 2px solid var(--surface); background: var(--warning); cursor: pointer; transition: transform var(--ease); }
+.status-dot:hover, .status-dot[aria-expanded="true"] { transform: scale(1.25); }
+.status-pop { position: fixed; z-index: 400; width: 280px; max-width: calc(100vw - 16px); padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 10px;
+  box-shadow: var(--shadow-pop); font-size: 12.5px; line-height: 1.45; color: var(--text); animation: ui-fade 120ms ease; }
+.status-pop[hidden] { display: none; }
