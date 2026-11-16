@@ -72,6 +72,7 @@ REMARKS = Field("text", "Remarks")
 # ── What the mapping form offers as a source: name, label, kind (a date is formatted, the rest typed as they are) ───
 SOURCE_VALUES = (
     ("client_ref", "Client ref", "text"),
+    ("tms_customer_ref", "TMS customer ref", "text"),
     ("itos_no", "ITOS no.", "text"),
     ("bl_number", "BL / booking no.", "text"),
     ("carrier", "Carrier (as the source writes it)", "text"),

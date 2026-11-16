@@ -102,13 +102,16 @@ Do Case 1 first, then add the field. If the value already exists on `v`, you onl
 | 1 | `database/source_sync.py` | Add the source column to `COLUMNS` and map it in `SHIPMENT_MAP` (per shipment) or `CONTAINER_FIELDS` (per container). Dates and numbers also need their converter in `parse_row()` |
 | 2 | `database/models.py` | Add the column to `Shipment` (and `ShipmentContainer` if containers can differ) |
 | 3 | `helpers/jobs.py` | Add it to the `"shipment"` dict in `build_payload`. Per-container values also go in `OWN_VALUES` |
-| 4 | `helpers/order_builder.py` | Add the name to `VALUE_NAMES`, so the client file can use `v.<name>` |
+| 4 | `engine/catalog.py` | Add `(name, label, kind)` to `SOURCE_VALUES`: the Admin mapping dropdown offers it, and client files can use `v.<name>` |
 | 5 | `clients/<slug>/<slug>.py` | Return it from the right function (table below) |
 | 6 | `helpers/tms_creation.py` | Add the selector and typing line (below) |
 
-> **Step 2 needs a fresh database.** There are no migrations: new columns on an existing table make the app refuse to
-> start until `database/app.db` is deleted, which also removes users, clients and shipments. Back up first. A new table
-> doesn't need this.
+> **Step 2 is applied on the next start.** A new column that may be empty (`nullable=True`, no default) is added to the
+> existing table automatically (`database/db.py` → `_add_new_columns`). A required column, a type change or a removed
+> column is still refused at startup: alter that table by hand. A new table is simply created.
+>
+> To offer the value in the Admin mapping dropdown, also add it to `SOURCE_VALUES` in `engine/catalog.py` (that also
+> makes it available as `v.<name>` in client files, so step 4 is automatic).
 
 ### Step 5 · Which function
 

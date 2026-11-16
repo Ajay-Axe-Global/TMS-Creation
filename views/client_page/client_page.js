@@ -35,8 +35,20 @@
 
   // ── notices ──
   function notice(el, kind, html) {
+    clearTimeout(el._hide);
     el.className = `notice ${kind}${html ? " show" : ""}`;
     el.innerHTML = html || "";
+  }
+  // A result message (sync, create) that closes by itself after `ms`. It stays while the mouse is on it or its
+  // notes are opened, and closes a few seconds after the mouse leaves.
+  function flash(el, kind, html, ms = 8000) {
+    notice(el, kind, html);
+    const arm = t => { clearTimeout(el._hide); el._hide = setTimeout(() => {
+      if (el.matches(":hover") || el.querySelector("details[open]")) return arm(3000);
+      notice(el, "", "");
+    }, t); };
+    arm(ms);
+    el.onmouseleave = () => { if (el.classList.contains("show")) arm(3000); };
   }
 
   // ── rendering ──
@@ -74,8 +86,8 @@
     // A search looks at every month; without one only the chosen month shows.
     // A shipment stays whole if any of its rows match, so the ITOS group keeps its context.
     return sortByAta(shipments.filter(s => (q || inMonth(s)) && (!q || [
-      s.itos_no, s.client_ref, s.carrier, s.vessel_name, s.remarks, s.customer_no, s.tradelane_no, s.bl_number, s.tms_file_no, s.depot_in, s.depot_out, ...s.files.map(f => f.name),
-      ...s.containers.flatMap(c => [c.container_no, c.container_type, c.seal_no, c.tms_order_no, c.goods, c.depot_out]),
+      s.itos_no, s.client_ref, s.tms_customer_ref, s.carrier, s.vessel_name, s.remarks, s.customer_no, s.tradelane_no, s.bl_number, s.tms_file_no, s.depot_in, s.depot_out, ...s.files.map(f => f.name),
+      ...s.containers.flatMap(c => [c.container_no, c.tms_customer_ref, c.container_type, c.seal_no, c.tms_order_no, c.goods, c.depot_out]),
     ].some(v => v && String(v).toLowerCase().includes(q)))));
   }
 
@@ -201,6 +213,7 @@
           ${cell("Trade Lane", s.tradelane_no, "mono ship nowrap")}
           ${cell("ITOS", s.itos_no, "mono ship")}
           ${cell("Client Ref", per(c, s, "client_ref"), cls(c, "client_ref", ""))}
+          ${cell("TMS Customer Ref", per(c, s, "tms_customer_ref"), cls(c, "tms_customer_ref", "nowrap"))}
           ${cell("ATA", fmtDate(per(c, s, "ata_date")), cls(c, "depot_out_from", "mono nowrap"))}
           ${cell("Carrier", per(c, s, "carrier"), cls(c, "carrier", ""))}
           ${first ? countCell(s, multi, open) : blank("Count")}
@@ -318,7 +331,7 @@
       const parts = [];
       if (q) parts.push(`Queued <strong>${q}</strong> shipment${q === 1 ? "" : "s"}. A browser will open shortly.`);
       if (r.skipped.length) parts.push(`Not queued:<ul>${r.skipped.map(x => `<li><strong>${esc(x.itos_no || "#" + x.shipment_id)}</strong> — ${esc(x.reason)}</li>`).join("")}</ul>`);
-      notice($("notice"), q ? (r.skipped.length ? "warn" : "ok") : "err", parts.map(x => `<div>${x}</div>`).join(""));
+      flash($("notice"), q ? (r.skipped.length ? "warn" : "ok") : "err", parts.map(x => `<div>${x}</div>`).join(""), q ? 8000 : 15000);
       selected.clear();
     } catch (e) {
       notice($("notice"), "err", esc(e.message));
@@ -339,7 +352,7 @@
       if (!r.fetched) parts.push("The source has no rows for this client — ask an administrator to check its name and warehouse.");
       if (r.skipped.length) parts.push(`${r.skipped.length} row(s) could not be loaded.`);
       if (r.warnings.length) parts.push(`<details><summary>${r.warnings.length} note(s) about the source data</summary><ul>${r.warnings.slice(0, 30).map(w => `<li>${esc(w)}</li>`).join("")}</ul></details>`);
-      notice($("notice"), !r.fetched || r.skipped.length ? "warn" : "ok", parts.map(x => `<div>${x}</div>`).join(""));
+      flash($("notice"), !r.fetched || r.skipped.length ? "warn" : "ok", parts.map(x => `<div>${x}</div>`).join(""));
     } catch (e) {
       notice($("notice"), "err", esc(e.message));
     }
