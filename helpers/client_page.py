@@ -124,15 +124,15 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                 # False = dry run: jobs sign in and reach the Orders list but create nothing.
                 "create_enabled": tms_worker.create_enabled(),
                 # False = no clients/<customer>/ file yet: the data shows, but nothing can be created
-                "flow_ready": flows.load(client.client_name) is not None,
+                "flow_ready": flows.available(session, client),
                 "doc_types": [{"id": t, "label": label} for t, label in shipment_files.DOC_TYPES],
                 "shipments": [{
                     "id": s.id,
                     "itos_no": s.itos_no,
                     "client_ref": s.client_ref,
                     "carrier": s.carrier,
-                    "customer_no": client.tms_customer_no,
-                    "tradelane_no": tradelanes.lane_for(client, code_of(s.carrier)),
+                    "customer_no": tradelanes.route_for(client, code_of(s.carrier))[0],
+                    "tradelane_no": tradelanes.route_for(client, code_of(s.carrier))[1],
                     "remarks": s.remarks,
                     "vessel_name": s.vessel_name,
                     "ata_date": _d(s.depot_out_from),     # the source's ata_date is stored as depot_out_from
@@ -208,7 +208,7 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
         session = SessionLocal()
         try:
             client = client_or_404(session, client_slug)
-            if flows.load(client.client_name) is None:
+            if not flows.available(session, client):
                 return jsonify({"error": f"There is no TMS order flow for {client.client_name} yet — "
                                          "ask an administrator to add it."}), 409
             try:

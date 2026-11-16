@@ -109,8 +109,35 @@
       <span class="count-n">${n}</span><svg viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></td>`;
   }
 
+  // A created shipment with something to double-check gets a small amber marker on its badge instead of red text;
+  // clicking the marker shows the note. Real failures keep their message under the badge.
+  let noteOpen = null;                         // the shipment whose note is open (kept across the 2.5 s refresh)
+  const notePop = document.createElement("div");
+  notePop.className = "status-pop";
+  notePop.hidden = true;
+  notePop.setAttribute("role", "dialog");
+  document.body.appendChild(notePop);
+  function placeNote() {
+    const dot = noteOpen !== null && document.querySelector(`[data-note="${noteOpen}"]`);
+    const ship = dot && shipments.find(x => x.id === noteOpen);
+    if (!dot || !ship || !ship.tms_error) { notePop.hidden = true; return; }
+    notePop.textContent = ship.tms_error;
+    notePop.hidden = false;
+    const r = dot.getBoundingClientRect(), w = notePop.offsetWidth, h = notePop.offsetHeight;
+    let left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
+    let top = r.bottom + 8;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 8);   // no room below: open upwards
+    notePop.style.left = left + "px";
+    notePop.style.top = top + "px";
+  }
   function statusCell(s) {
     if (s.tms_status === "not_started") return `<td class="status-col" data-label="Status"><span class="empty-cell">—</span></td>`;
+    if (s.tms_status === "done" && s.tms_error) {
+      const open = noteOpen === s.id;
+      return `<td class="status-col" data-label="Status"><span class="status-wrap">
+        <span class="status-badge done">${esc(STATUS_LABEL.done || "Created")}</span>
+        <button type="button" class="status-dot" data-note="${s.id}" aria-expanded="${open}" title="Show the note" aria-label="Show the note"></button></span></td>`;
+    }
     let note = "";
     if (s.activity && s.activity.message && (s.tms_status === "queued" || s.tms_status === "running"))
       note = `<div class="status-note">${esc(s.activity.message)}</div>`;
@@ -202,6 +229,7 @@
         </tr>`;
       }).join("");
     }).join("");
+    placeNote();
 
     $("counts").textContent = `${shown.length} shipment${shown.length === 1 ? "" : "s"} · ${containers} container${containers === 1 ? "" : "s"}`;
     const empty = $("empty");
@@ -429,8 +457,28 @@
   $("attach-close").addEventListener("click", closeAttach);
   $("attach-overlay").addEventListener("click", e => { if (e.target.id === "attach-overlay") closeAttach(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && attachSid) closeAttach(); });
+  // a click anywhere else, or Escape, closes an open status note
+  const closeNote = () => {
+    if (noteOpen === null) return;
+    noteOpen = null;
+    notePop.hidden = true;
+    document.querySelectorAll("[data-note]").forEach(b => b.setAttribute("aria-expanded", "false"));
+  };
+  document.addEventListener("click", e => { if (!e.target.closest(".status-wrap") && !e.target.closest(".status-pop")) closeNote(); });
+  window.addEventListener("resize", closeNote);
+  document.addEventListener("scroll", closeNote, true);       // the table or the page scrolled: the bubble would float away
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeNote(); });
 
   $("rows").addEventListener("click", e => {
+    const nt = e.target.closest("[data-note]");
+    if (nt) {
+      const id = +nt.dataset.note;
+      noteOpen = noteOpen === id ? null : id;
+      document.querySelectorAll("[data-note]").forEach(b => b.setAttribute("aria-expanded", String(+b.dataset.note === noteOpen)));
+      placeNote();
+      e.stopPropagation();
+      return;
+    }
     const at = e.target.closest("[data-attach]");
     const tg = e.target.closest("[data-toggle]");
     const vd = e.target.closest("[data-video]");

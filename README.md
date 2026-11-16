@@ -32,6 +32,8 @@ the goods-code table (`helpers/tms_codes.py`).
 | Goods name → TMS goods code | `helpers/tms_codes.py` (`GOODS`) |
 | Client page (shared by all clients) | `helpers/client_page.py`, `views/client_page/` |
 | Screen recordings | `helpers/job_video.py` |
+| Every TMS field + selector, per-client mappings (in the database) | `engine/` (`catalog.py`, `recipe.py`, `store.py`) |
+| Mapping or client file — which one a client uses | `helpers/flows.py` (a published mapping wins, else `clients/<slug>/`) |
 
 ---
 
@@ -70,7 +72,7 @@ TASK_REGISTRY = [emvia_bp, sabic_bp, acme_bp]
 
 | Tab | Do |
 |---|---|
-| Clients | Client name, warehouse, TMS customer no., trade lane per carrier (`ALL` = fallback) |
+| Clients | Client name, warehouse, TMS customer no., trade lane per carrier (`ALL` = fallback). A carrier row may also carry its own customer no. when that differs by carrier; otherwise the client's is used |
 | Users | Create users, grant the client, set each user's own TMS username and password |
 | Carriers & Addresses | Map every carrier and depot the client uses. Unmapped depots block sending |
 

@@ -87,10 +87,22 @@ def _sweep_orphans(root: str) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def _memory_ok(min_free_gb: float = 2.0) -> bool:
-    if psutil is None:
-        return True
-    return psutil.virtual_memory().available / (1024 ** 3) >= min_free_gb
+def _min_free_gb() -> float:
+    """Free memory the box must have before a job is taken (TMS_MIN_FREE_GB, default 2). 0 = no check."""
+    try:
+        return max(0.0, float(os.getenv("TMS_MIN_FREE_GB", "2")))
+    except ValueError:
+        return 2.0
+
+
+def _free_gb() -> float | None:
+    return None if psutil is None else psutil.virtual_memory().available / (1024 ** 3)
+
+
+def _memory_ok(min_free_gb: float | None = None) -> bool:
+    need = _min_free_gb() if min_free_gb is None else min_free_gb
+    free = _free_gb()
+    return free is None or free >= need
 
 
 def _ramdisk_ok(root: str | None, reserve_mb: int = 200) -> bool:
@@ -253,6 +265,16 @@ class BrowserPool(threading.Thread):
                 logger.exception("pool: dispatcher error")
                 self.stopping.wait(self.poll)
 
+    def _queued_jobs(self) -> int:
+        """How many jobs are waiting for a browser (the low-memory warning is only worth showing when one is)."""
+        db = SessionLocal()
+        try:
+            return db.query(TmsJob).filter(TmsJob.status == "queued").count()
+        except Exception:
+            return 0
+        finally:
+            SessionLocal.remove()
+
     def _live(self) -> list:
         return [x for x in self.browsers if not x.dead]
 
@@ -262,7 +284,12 @@ class BrowserPool(threading.Thread):
                 full = True
             else:
                 full = False
-        if full or not _memory_ok() or not _ramdisk_ok(self.profile_root):
+        low_memory = not _memory_ok()
+        if full or low_memory or not _ramdisk_ok(self.profile_root):
+            if low_memory and time.monotonic() - getattr(self, "_gate_logged", 0.0) > 30 and self._queued_jobs():
+                self._gate_logged = time.monotonic()
+                logger.warning("Jobs are waiting: only %.1f GB of memory is free and %.1f GB is needed before a browser "
+                               "is opened (close other programs, or lower TMS_MIN_FREE_GB).", _free_gb() or 0.0, _min_free_gb())
             self.stopping.wait(0.5)       # every slot busy, or the box is low on memory/RAM-disk headroom
             return
         db = SessionLocal()

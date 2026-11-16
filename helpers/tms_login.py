@@ -43,6 +43,8 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from helpers import convert
+
 logger = logging.getLogger("tms_login")
 
 # The TMS company URL from the recorded flow.
@@ -62,8 +64,9 @@ BC_READY_SELECTOR = os.getenv("TMS_BC_READY_SELECTOR", '[class*="ms-nav-"]')
 # BC must stay ready this long: an expired session can flash BC's shell for a moment
 # before redirecting to the login page, and that must not count as "still signed in".
 BC_SETTLE_SECONDS = 2.0
-# Date display in BC follows the browser locale; the flow script types d/MM/yyyy.
-TMS_LOCALE = os.getenv("TMS_LOCALE", "en-GB")
+# Business Central reads typed dates by the browser locale, so it must match the order the flow types them in
+# (TMS_DATE_FORMAT, helpers/convert.py): month/day/year -> en-US, day/month/year -> en-GB. TMS_LOCALE overrides.
+TMS_LOCALE = os.getenv("TMS_LOCALE") or ("en-GB" if convert.date_order() == "dmy" else "en-US")
 TMS_TIMEZONE = os.getenv("TMS_TIMEZONE", "Europe/Brussels")
 CHROME_PATH = os.getenv("TMS_CHROME_PATH") or None   # None = Playwright's bundled Chromium
 

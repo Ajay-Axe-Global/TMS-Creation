@@ -25,15 +25,16 @@ many, which depot is on which line, and what each copied order must be corrected
     check_payload(payload, flow) -> [reasons]   asked when the user clicks Create, BEFORE anything is queued
     create_order(page, frame, payload, log, flow)   called by the worker with the empty new-order card open
 """
+from engine import catalog
 from helpers import goods as goods_svc
 from helpers import tms_creation
 from helpers.flow_errors import FlowFailed
 
-# The General-tab fields a customer's general() may return (plus "sealNo", and the CONSTANT_FIELDS typed once)
-GENERAL_FIELDS = ("customerRef", "bookingRef", "vesselName", "countryOrigin", "countryDest", "containerType",
-                  "closingDatetime", "carrier", "depotOutFrom", "vgmClosingDate")
-SAME_ON_ALL_ORDERS = {"containerType"}                         # never corrected per order: the orders are copies
-CONSTANT_FIELDS = {"tractionOrder", "containerSubtype"}         # typed on the first order only
+# The General-tab fields a customer's general() may return (plus "sealNo", and the CONSTANT_FIELDS typed once) — all
+# declared once, in engine/catalog.py
+GENERAL_FIELDS = tuple(f.key for f in catalog.general("normal"))
+SAME_ON_ALL_ORDERS = {f.key for f in catalog.GENERAL if f.same_on_all}   # never corrected per order: the orders are copies
+CONSTANT_FIELDS = {f.key for f in catalog.general("once")}               # typed on the first order only
 LINE_KEYS = {"DEPOT OUT": "depot_out", "DEPOT IN": "depot_in"}  # Lines action -> key in the payload
 LINE_ACTIONS = ("DEPOT OUT", "UNLOAD", "DEPOT IN")              # the Lines rows, top to bottom (UNLOAD has no depot of its own)
 OTHER_LINES = "OTHERS"        # every Lines row that is not DEPOT OUT / DEPOT IN (TMS may generate any number of them,
@@ -41,9 +42,7 @@ OTHER_LINES = "OTHERS"        # every Lines row that is not DEPOT OUT / DEPOT IN
 LINE_VALUES = {"ref", "bookedFrom", "bookedUntil"}
 CARGO_VALUES = {"goodNo", "quantity", "grossWeight"}
 DEFAULT_SAME_FOR_ALL = ("container_type",)                      # the flow copies the first order, so the type is shared
-VALUE_NAMES = ("client_ref", "itos_no", "bl_number", "carrier", "carrier_code", "vessel_name", "country_of_origin",
-               "country_of_destination", "closing_date", "depot_out_from", "vgm_closing_date", "remarks",
-               "container_no", "container_type", "seal_no", "goods", "qty", "gross_weight")
+VALUE_NAMES = catalog.FLAT_VALUE_NAMES                          # the plain values every container carries
 
 
 class FlowSpecError(Exception):
@@ -89,7 +88,7 @@ class Spec:
             raise FlowSpecError(f"{self.name}: it has no general(v) function")
         empty = Values({**{n: "" for n in VALUE_NAMES}, "goods_code": "",
                         "depot_out": Depot(None), "depot_in": Depot(None)})
-        bad = sorted(set(self.general(empty)) - set(GENERAL_FIELDS) - CONSTANT_FIELDS - {"sealNo"})
+        bad = sorted(set(self.general(empty)) - set(GENERAL_FIELDS) - CONSTANT_FIELDS - {"sealNo", "containerNo"})
         if self.lines:
             got = self.lines(empty)
             bad += sorted(a for a in got if a not in (*LINE_ACTIONS, OTHER_LINES))
@@ -163,7 +162,8 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
         data[field] = g.get(field, "")
     # ONE container: typed here in General. SEVERAL: left empty (every copy would inherit it); each order gets
     # its own container and seal after the copies are made.
-    data["containerNo"] = first["container_no"] if single else ""
+    # (the Container No. field types what the client's mapping says, the plain container number when it says nothing)
+    data["containerNo"] = (g.get("containerNo") or first["container_no"]) if single else ""
     data["sealNo"] = g.get("sealNo", "") if single else ""
     # every attached document with the TMS Document Types zone it was dropped under
     data["files"] = [{"path": f["path"], "docType": f["doc_type"]} for f in files]
@@ -215,7 +215,8 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
         in_no, in_ref, in_booked = depot(c, "depot_in", "DEPOT IN")
         gc, cg = general(c), cargo_of(c)
         oth = lines_of(c).get(OTHER_LINES) or {}
-        return {"containerNo": c["container_no"],
+        # "containerNo" is the container's identity (results are saved by it); "containerNoText" is what is typed
+        return {"containerNo": c["container_no"], "containerNoText": gc.get("containerNo") or c["container_no"],
                 "otherFrom": _text(oth.get("bookedFrom")), "otherUntil": _text(oth.get("bookedUntil")),
                 "sealNo": gc.get("sealNo", ""),
                 # the General fields this order must end with; the flow corrects those that differ from the first order

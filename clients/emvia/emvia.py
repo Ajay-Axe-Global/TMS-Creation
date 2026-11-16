@@ -27,6 +27,7 @@ def general(v):
         "vgmClosingDate": date_time(v.vgm_closing_date, TIME),
         "sealNo": v.seal_no,
         "tractionOrder": "Import",                  # every shipment is an import
+        "transportType": "ANT TRANSPORT",           # TMS's Transport Type list (engine/catalog.TRANSPORT_TYPES)
     }
 
 

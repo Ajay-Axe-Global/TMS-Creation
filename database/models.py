@@ -6,6 +6,7 @@ Layout
                                           customer + warehouse (Emvia - 1147, Emvia - NNRC
                                           are two clients). Its flow code lives in
                                           clients/<client name slug>/, shared by its warehouses.
+  Client ──< ClientMapping ──< ClientMappingRow   the client's TMS field mapping, versioned (engine/)
   User ──1 TmsCredential ──1 BrowserSession
   Client ──< Shipment ──< ShipmentContainer     one shipment per ITOS number
   Shipment ──1 ShipmentFile                     the one document dropped on its row (the TMS attachment)
@@ -55,7 +56,7 @@ class Client(Base):
 
 
 class ClientTradeLane(Base):
-    """A client's TMS trade lane no. for one carrier (the TMS carrier shortcut: MSK, MSC, HPG ...). The carrier "ALL"
+    """A client's TMS trade lane no. (and, when it differs by carrier, customer no.) for one carrier (the TMS carrier shortcut: MSK, MSC, HPG ...). The carrier "ALL"
     is the lane for every carrier the client has no lane of its own for — a client with one lane has just that row."""
     __tablename__ = "client_trade_lanes"
     __table_args__ = (UniqueConstraint("client_id", "carrier", name="uq_client_lane_carrier"),)
@@ -64,8 +65,45 @@ class ClientTradeLane(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
     carrier = Column(String(20), nullable=False)                # "ALL" | a Carrier.code
     tradelane_no = Column(String(60), nullable=False)           # e.g. TLVMT25-100245
+    # This carrier's own TMS customer no., for a client whose customer no. differs by carrier; empty = the client's.
+    customer_no = Column(String(60), nullable=True)
 
     client = relationship("Client", back_populates="tradelanes")
+
+
+class ClientMapping(Base):
+    """One VERSION of a client's field mapping (engine/): which source value, in which format, goes into each TMS
+    field. A client has at most one 'published' version (the one jobs use) and one 'draft' (being edited); a
+    replaced published version is 'archived' and can be restored. A job records the version it was queued with."""
+    __tablename__ = "client_mappings"
+    __table_args__ = (UniqueConstraint("client_id", "version", name="uq_mapping_client_version"),)
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    status = Column(String(12), nullable=False, default="draft")      # draft | published | archived
+    settings = Column(JSON, nullable=False, default=dict)             # engine/recipe.DEFAULT_SETTINGS, overridden
+    note = Column(String(200), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    published_at = Column(DateTime, nullable=True)
+
+    client = relationship("Client")
+    rows = relationship("ClientMappingRow", back_populates="mapping", cascade="all, delete-orphan",
+                        order_by="ClientMappingRow.key")
+
+
+class ClientMappingRow(Base):
+    """One field of a mapping: its catalogue key ("general.bookingRef") and its recipe (engine/recipe.py)."""
+    __tablename__ = "client_mapping_rows"
+    __table_args__ = (UniqueConstraint("mapping_id", "key", name="uq_mapping_row_key"),)
+
+    id = Column(Integer, primary_key=True)
+    mapping_id = Column(Integer, ForeignKey("client_mappings.id"), nullable=False, index=True)
+    key = Column(String(60), nullable=False)
+    recipe = Column(JSON, nullable=False)
+
+    mapping = relationship("ClientMapping", back_populates="rows")
 
 
 class Carrier(Base):

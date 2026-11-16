@@ -7,468 +7,507 @@
   <title>TMS Platform — Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap"
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet" />
   <script src="/static/js/theme.js"></script>
   <link rel="stylesheet" href="/static/css/theme.css" />
   <link rel="stylesheet" href="/admin/admin.css" />
 </head>
 
-<body>
+<body class="admin">
   <div id="page-loader">
     <div class="spinner"></div>
   </div>
-  <header class="topbar">
-    <h1>TMS Platform — Admin</h1>
-    <div class="header-right">
-      <div class="tabs">
-        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-        <button class="tab-btn" data-tab="users">Users</button>
-        <button class="tab-btn" data-tab="clients">Clients</button>
-        <button class="tab-btn" data-tab="addresses">Carriers &amp; Addresses</button>
-        <button class="tab-btn" data-tab="videos">Videos</button>
-        <button class="tab-btn" data-tab="audit">Audit log</button>
-      </div>
-      <button class="theme-toggle" id="theme-btn"></button>
-      <button class="btn btn-ghost" id="logout-btn">Log out</button>
-    </div>
-  </header>
 
-
-
-  <main>
-    <!-- ═══════════════════ DASHBOARD TAB ═══════════════════ -->
-    <div class="tab-panel active" id="tab-dashboard">
-      <div class="stat-row">
-        <div class="stat-tile">
-          <div class="label">Total orders</div>
-          <div class="value" id="stat-total">—</div>
-        </div>
-        <div class="stat-tile">
-          <div class="label">Success rate</div>
-          <div class="value good" id="stat-rate">—</div>
-        </div>
-        <div class="stat-tile">
-          <div class="label">Orders today</div>
-          <div class="value" id="stat-today">—</div>
-        </div>
-        <div class="stat-tile">
-          <div class="label">Orders this week</div>
-          <div class="value" id="stat-week">—</div>
-        </div>
+  <div class="app-shell">
+    <!-- ═══════════ sidebar: brand, navigation (the .tab-btn buttons admin.js switches on), footer ═══════════ -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <span class="logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h11v9H3z"/><path d="M14 10h4l3 3v3h-7z"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg>
+        </span>
+        <div class="brand-text"><b>TMS Platform</b><span>Administration</span></div>
       </div>
 
-      <div class="panel full" style="margin-bottom:20px">
-        <h2>Orders created — last 14 days</h2>
-        <div class="filter-row">
-          <select id="chart-filter-client">
-            <option value="">All clients</option>
-          </select>
-        </div>
-        <div id="chart-wrap">
-          <svg id="chart-svg" width="100%" height="240" viewBox="0 0 1080 240" preserveAspectRatio="none"></svg>
-          <div id="chart-tooltip"></div>
-        </div>
+      <nav class="sidebar-nav">
+        <div class="nav-group">Overview</div>
+        <button class="tab-btn nav-item active" data-tab="dashboard" data-title="Dashboard" title="Dashboard"
+          data-sub="Orders created in TMS, by client and by team member">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+          <span>Dashboard</span>
+        </button>
+
+        <div class="nav-group">Setup</div>
+        <button class="tab-btn nav-item" data-tab="clients" data-title="Clients" title="Clients"
+          data-sub="Onboard a client, set its TMS customer and trade lanes, and map its TMS fields">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/><path d="M3 21h18"/></svg>
+          <span>Clients</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="users" data-title="Users" title="Users"
+          data-sub="Who can sign in, their TMS login, and which clients they work on">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7"/><path d="M18 14a6.5 6.5 0 0 1 3.5 6"/></svg>
+          <span>Users</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="addresses" data-title="Master data" title="Master data"
+          data-sub="Depot addresses, carriers and goods codes — shared by every client">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>
+          <span>Master data</span>
+        </button>
+
+        <div class="nav-group">Activity</div>
+        <button class="tab-btn nav-item" data-tab="videos" data-title="Job videos" title="Job videos"
+          data-sub="Screen recordings of runs — watch, and delete what is no longer needed">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="14" height="14" rx="2"/><path d="m16.5 10 5-3v10l-5-3"/></svg>
+          <span>Videos</span>
+        </button>
+        <button class="tab-btn nav-item" data-tab="audit" data-title="Audit log" title="Audit log"
+          data-sub="Every change made in Admin, with who made it and when">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></svg>
+          <span>Audit log</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span class="avatar" id="me-avatar">A</span>
+        <div class="who"><b id="me-name">Administrator</b><span class="muted">Admin</span></div>
+        <button class="icon-btn" id="logout-btn" title="Log out" aria-label="Log out">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+        </button>
       </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
 
-      <div class="grid-2">
-        <div class="panel">
-          <h2>Orders by client</h2>
-          <div class="filter-row">
-            <select id="client-bar-period">
-              <option value="today">Today</option>
-              <option value="week">This week</option>
-              <option value="month">This month</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-          <div class="custom-range" id="client-bar-custom-range" style="display:none">
-            <input type="date" id="client-bar-since" />
-            <span class="range-sep">to</span>
-            <input type="date" id="client-bar-until" />
-            <button type="button" class="period-apply" id="client-bar-apply-btn">Apply</button>
-          </div>
-          <div id="client-bar-wrap">
-            <svg id="client-bar-svg" width="100%" height="240" viewBox="0 0 520 240" preserveAspectRatio="none"></svg>
-          </div>
+    <div class="content">
+      <!-- ═══════════ page header ═══════════ -->
+      <header class="app-header">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="Toggle menu" title="Toggle menu">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="page-heading">
+          <div class="crumbs">Admin <span>/</span> <b id="page-crumb">Dashboard</b></div>
+          <h1 id="page-title">Dashboard</h1>
         </div>
+        <div class="header-actions">
+          <button class="theme-toggle" id="theme-btn"></button>
+          <button class="header-logout" id="header-logout-btn" title="Log out" aria-label="Log out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+            <span>Log out</span>
+          </button>
+        </div>
+      </header>
 
-        <div class="panel">
-          <h2>Orders by client — share</h2>
-          <div class="filter-row">
-            <select id="client-pie-period">
-              <option value="today">Today</option>
-              <option value="week">This week</option>
-              <option value="month">This month</option>
-              <option value="custom">Custom</option>
-            </select>
+      <main>
+        <!-- ═══════════════════ DASHBOARD ═══════════════════ -->
+        <section class="tab-panel active" id="tab-dashboard">
+          <div class="kpi-row four">
+            <div class="kpi-tile"><span class="stat-icon "><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg></span><div><div class="label">Total orders</div><div class="value" id="stat-total">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon good"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><div><div class="label">Success rate</div><div class="value" id="stat-rate">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><div><div class="label">Orders today</div><div class="value" id="stat-today">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon "><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M16 2.5v4M8 2.5v4M3 10h18"/></svg></span><div><div class="label">This week</div><div class="value" id="stat-week">—</div></div></div>
           </div>
-          <div class="custom-range" id="client-pie-custom-range" style="display:none">
-            <input type="date" id="client-pie-since" />
-            <span class="range-sep">to</span>
-            <input type="date" id="client-pie-until" />
-            <button type="button" class="period-apply" id="client-pie-apply-btn">Apply</button>
-          </div>
-          <div class="pie-row">
-            <svg id="client-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
-            <div class="pie-legend" id="client-pie-legend"></div>
-          </div>
-        </div>
-      </div>
 
-      <div class="panel full">
-        <h2>Orders by user · client</h2>
-        <div class="filter-row">
-          <div class="period-group" id="period-group">
-            <button type="button" class="period-seg active" data-period="today">Today</button>
-            <button type="button" class="period-seg" data-period="week">This week</button>
-            <button type="button" class="period-seg" data-period="month">This month</button>
-            <button type="button" class="period-seg" data-period="custom">Custom</button>
+          <div class="panel full">
+            <div class="panel-head">
+              <h2>Orders created — last 14 days</h2>
+              <div class="filter-row"><select id="chart-filter-client"><option value="">All clients</option></select></div>
+            </div>
+            <div id="chart-wrap">
+              <svg id="chart-svg" width="100%" height="240" viewBox="0 0 1080 240" preserveAspectRatio="none"></svg>
+              <div id="chart-tooltip"></div>
+            </div>
           </div>
-          <div class="custom-range" id="custom-range" style="display:none">
-            <input type="date" id="custom-since" />
-            <span class="range-sep">to</span>
-            <input type="date" id="custom-until" />
-            <button type="button" class="period-apply" id="custom-apply-btn">Apply</button>
-          </div>
-          <select id="filter-user">
-            <option value="">All users</option>
-          </select>
-          <select id="filter-client">
-            <option value="">All clients</option>
-          </select>
-          <div class="period-group"><button type="button" class="period-seg"
-              id="productivity-toggle">Productivity</button></div>
-          <input type="search" id="summary-search" class="search-input" placeholder="Search…" />
-        </div>
-        <div class="table-scroll">
-          <table id="summary-table">
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Client</th>
-                <th>Orders</th>
-                <th>Shipments</th>
-                <th>Last run</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-            <tfoot></tfoot>
-          </table>
-        </div>
-        <div id="productivity-section" style="display:none">
-          <h2 style="margin-top:20px">Productivity — orders per team member</h2>
-          <div class="pie-row">
-            <svg id="productivity-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
-            <div class="pie-legend" id="productivity-pie-legend"></div>
-          </div>
-        </div>
-      </div>
-    </div>
 
-    <!-- ═══════════════════ USERS TAB ═══════════════════ -->
-    <div class="tab-panel" id="tab-users">
-      <div class="grid-2">
-        <div class="panel">
-          <h2 id="user-form-title">Add user</h2>
-          <label for="user-name">Full name</label>
-          <input id="user-name" />
-          <div class="row">
-            <div><label for="user-username">Username</label><input id="user-username" autocomplete="off" /></div>
-            <div><label for="user-password">Password</label><input id="user-password" type="password"
-                autocomplete="new-password" /></div>
-          </div>
-          <label for="user-role">Role</label>
-          <select class="form-input" id="user-role">
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
-          </select>
-
-          <div id="user-only-block">
-            <div class="row">
-              <div>
-                <label for="user-tms-username">TMS username</label>
-                <input id="user-tms-username" autocomplete="off" />
+          <div class="grid-2">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>Orders by client</h2>
+                <div class="filter-row">
+                  <select id="client-bar-period">
+                    <option value="today">Today</option>
+                    <option value="week">This week</option>
+                    <option value="month">This month</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
               </div>
-              <div>
-                <label for="user-tms-password">TMS password</label>
-                <input id="user-tms-password" type="password" autocomplete="new-password" />
+              <div class="custom-range" id="client-bar-custom-range" style="display:none">
+                <input type="date" id="client-bar-since" />
+                <span class="range-sep">to</span>
+                <input type="date" id="client-bar-until" />
+                <button type="button" class="period-apply" id="client-bar-apply-btn">Apply</button>
+              </div>
+              <div id="client-bar-wrap">
+                <svg id="client-bar-svg" width="100%" height="240" viewBox="0 0 520 240" preserveAspectRatio="none"></svg>
               </div>
             </div>
 
-            <div id="assignment-block">
-              <label>Client access</label>
-              <div class="grant-add-row">
-                <div><select class="form-input" id="user-client"></select></div>
-                <button type="button" id="add-grant-btn">+ Add</button>
+            <div class="panel">
+              <div class="panel-head">
+                <h2>Share by client</h2>
+                <div class="filter-row">
+                  <select id="client-pie-period">
+                    <option value="today">Today</option>
+                    <option value="week">This week</option>
+                    <option value="month">This month</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
               </div>
-              <div class="grant-chips" id="grant-chips"></div>
+              <div class="custom-range" id="client-pie-custom-range" style="display:none">
+                <input type="date" id="client-pie-since" />
+                <span class="range-sep">to</span>
+                <input type="date" id="client-pie-until" />
+                <button type="button" class="period-apply" id="client-pie-apply-btn">Apply</button>
+              </div>
+              <div class="pie-row">
+                <svg id="client-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
+                <div class="pie-legend" id="client-pie-legend"></div>
+              </div>
             </div>
           </div>
-          <button class="primary" id="add-user-btn">Add user</button>
-          <button class="primary secondary" id="cancel-edit-btn">Cancel edit</button>
-          <div class="msg" id="user-msg"></div>
-        </div>
 
-        <div class="stat-col">
-          <div class="stat-tile">
-            <div class="label">Total users</div>
-            <div class="value" id="stat-total-users">—</div>
+          <div class="panel full">
+            <div class="panel-head">
+              <h2>Orders by user and client</h2>
+            </div>
+            <div class="filter-row">
+              <div class="period-group" id="period-group">
+                <button type="button" class="period-seg active" data-period="today">Today</button>
+                <button type="button" class="period-seg" data-period="week">This week</button>
+                <button type="button" class="period-seg" data-period="month">This month</button>
+                <button type="button" class="period-seg" data-period="custom">Custom</button>
+              </div>
+              <div class="custom-range" id="custom-range" style="display:none">
+                <input type="date" id="custom-since" />
+                <span class="range-sep">to</span>
+                <input type="date" id="custom-until" />
+                <button type="button" class="period-apply" id="custom-apply-btn">Apply</button>
+              </div>
+              <select id="filter-user"><option value="">All users</option></select>
+              <select id="filter-client"><option value="">All clients</option></select>
+              <div class="period-group"><button type="button" class="period-seg" id="productivity-toggle">Productivity</button></div>
+              <input type="search" id="summary-search" class="search-input" placeholder="Search…" />
+            </div>
+            <div class="table-scroll">
+              <table id="summary-table">
+                <thead>
+                  <tr><th>User</th><th>Client</th><th>Orders</th><th>Shipments</th><th>Last run</th></tr>
+                </thead>
+                <tbody></tbody>
+                <tfoot></tfoot>
+              </table>
+            </div>
+            <div id="productivity-section" style="display:none">
+              <h2 style="margin-top:22px">Productivity — orders per team member</h2>
+              <div class="pie-row">
+                <svg id="productivity-pie-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
+                <div class="pie-legend" id="productivity-pie-legend"></div>
+              </div>
+            </div>
           </div>
-          <div class="stat-tile">
-            <div class="label">Total clients</div>
-            <div class="value" id="stat-total-clients">—</div>
-          </div>
-        </div>
-      </div>
+        </section>
 
-      <div class="panel full">
-        <h2 style="margin-bottom:16px">Users</h2>
-        <div class="filter-row">
-          <select id="users-filter-client">
-            <option value="">All clients</option>
-          </select>
-        </div>
-        <div class="table-scroll">
-          <table id="users-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Username</th>
-                <th>Role</th>
-                <th>Clients</th>
-                <th>Status</th>
-                <th>TMS login</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
+        <!-- ═══════════════════ CLIENTS: onboarding, mapping, list ═══════════════════ -->
+        <section class="tab-panel" id="tab-clients">
+          <div class="split">
+            <div class="panel">
+              <div class="panel-head"><h2 id="client-form-title">Add client</h2></div>
+              <div class="field-grid">
+                <div><label for="client-name">Client name</label><input id="client-name" list="lookup-clients" autocomplete="off"
+                    placeholder="As in the source" /><datalist id="lookup-clients"></datalist></div>
+                <div><label for="client-warehouse">Warehouse</label><input id="client-warehouse" list="lookup-warehouses" autocomplete="off"
+                    placeholder="As in the source" /><datalist id="lookup-warehouses"></datalist></div>
+              </div>
+
+              <div class="sub-head">TMS customer &amp; trade lanes</div>
+              <div class="lane-head"><span>Carrier</span><span>Customer no.</span><span>Trade lane no.</span><span></span></div>
+              <div id="tradelane-rows"></div>
+              <button type="button" class="link-btn" id="add-lane-btn">+ Add carrier</button>
+
+              <div class="form-actions">
+                <div class="msg" id="client-msg"></div>
+                <button class="primary secondary" id="cancel-client-btn" style="display:none">Cancel</button>
+                <button class="primary" id="add-client-btn">Add client</button>
+              </div>
+            </div>
+
+            <div class="side-col">
+            <div class="panel">
+              <div class="panel-head"><h2>Source database</h2></div>
+              <div class="btn-row">
+                <button class="primary secondary" id="sync-preview-btn">Preview</button>
+                <button class="primary" id="sync-run-btn">Sync from source</button>
+              </div>
+              <div class="msg" id="sync-msg"></div>
+              <div id="sync-detail" class="panel-sub sync-detail"></div>
+            </div>
+            <div class="kpi-row pair">
+            <div class="kpi-tile"><span class="stat-icon "><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V8l9-5 9 5v13"/><path d="M3 21h18"/></svg></span><div><div class="label">Total clients</div><div class="value" id="client-stat-total">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon good"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><div><div class="label">Ready for TMS</div><div class="value" id="client-stat-ready">—</div></div></div>
+            </div>
+            </div>
+          </div>
+
+          <!-- the client's TMS field mapping (admin/mapping.js) -->
+          <div class="panel full map-panel" id="mapping-panel" style="display:none">
+            <div class="map-head">
+              <div class="map-head-title">
+                <div>
+                  <h2 id="map-title">Field mapping</h2>
+                  <div class="map-status" id="map-status"></div>
+                </div>
+              </div>
+              <div class="map-head-actions">
+                <span class="map-dirty" id="map-dirty" style="display:none"></span>
+                <button type="button" class="map-btn map-btn-danger" id="map-unpublish-btn" style="display:none">Unpublish</button>
+                <button type="button" class="map-btn" id="map-save-btn">Save draft</button>
+                <button type="button" class="map-btn map-btn-main" id="map-publish-btn">Publish</button>
+                <button type="button" class="icon-btn" id="map-close-btn" title="Close" aria-label="Close">&times;</button>
+              </div>
+            </div>
+
+            <div class="map-toolbar">
+              <div class="map-tool-row">
+                <select id="map-copy-from" aria-label="Copy from client"></select>
+                <button type="button" class="map-btn" id="map-copy-btn">Copy template</button>
+                <button type="button" class="map-btn" id="map-starter-btn" style="display:none">Load client file</button>
+              </div>
+              <div class="map-tool-row">
+                <select id="map-versions" aria-label="Version"></select>
+                <button type="button" class="map-btn" id="map-restore-btn">Restore</button>
+              </div>
+            </div>
+            <div class="msg" id="map-msg"></div>
+
+            <div class="map-shell">
+              <nav class="map-steps" id="map-steps" aria-label="Mapping sections"></nav>
+              <div class="map-body">
+                <div id="map-sections"></div>
+                <div class="map-pane" id="map-pane-preview" data-pane="preview" hidden>
+                  <div class="pane-head"><h3>Preview</h3></div>
+                  <div class="map-tool-row"><select id="map-shipment" aria-label="Shipment"></select>
+                    <button type="button" class="map-btn map-btn-main" id="map-preview-btn">Build preview</button></div>
+                  <div id="map-preview"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel full">
+            <div class="panel-head"><h2>All clients</h2></div>
+            <div class="table-scroll">
+              <table id="clients-table">
+                <thead>
+                  <tr><th>Client</th><th>Warehouse</th><th>Customer no.</th><th>Trade lane(s)</th><th>Field mapping</th><th>Users</th><th>Status</th><th></th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════ USERS ═══════════════════ -->
+        <section class="tab-panel" id="tab-users">
+          <div class="kpi-row">
+            <div class="kpi-tile"><span class="stat-icon "><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/></svg></span><div><div class="label">Total users</div><div class="value" id="stat-total-users">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon good"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><div><div class="label">Active</div><div class="value" id="stat-active-users">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M17 6l3 3M15 8l2 2"/></svg></span><div><div class="label">TMS login needs attention</div><div class="value" id="stat-tms-issues">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon "><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V8l9-5 9 5v13"/><path d="M3 21h18"/></svg></span><div><div class="label">Total clients</div><div class="value" id="stat-total-clients">—</div></div></div>
+          </div>
+
+          <div class="panel full">
+            <div class="panel-head">
+              <h2>All users <span class="count-chip" id="users-count"></span></h2>
+              <button class="primary" id="users-add-btn">+ Add user</button>
+            </div>
+            <div class="toolbar">
+              <input type="search" id="users-search" class="search-input" placeholder="Search name, username or TMS login" />
+              <select id="users-filter-client"><option value="">All clients</option></select>
+              <select id="users-filter-role">
+                <option value="">All roles</option><option value="user">User</option><option value="admin">Admin</option>
+              </select>
+              <select id="users-filter-status">
+                <option value="">Any status</option><option value="active">Active</option><option value="inactive">Inactive</option>
+              </select>
+              <select id="users-filter-tms">
+                <option value="">Any TMS login</option><option value="connected">Connected</option>
+                <option value="attention">Needs attention</option><option value="not_set">Not set</option>
+              </select>
+              <button type="button" class="link-btn" id="users-clear-btn">Clear filters</button>
+            </div>
+            <div class="table-scroll">
+              <table id="users-table">
+                <thead>
+                  <tr><th>Name</th><th>Username</th><th>Role</th><th>Clients</th><th>Status</th><th>TMS login</th><th></th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════ MASTER DATA: addresses, carriers, goods ═══════════════════ -->
+        <section class="tab-panel" id="tab-addresses">
+          <div class="kpi-row">
+            <div class="kpi-tile"><span class="stat-icon "><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.1-7-11.5a7 7 0 0 1 14 0C19 14.9 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg></span><div><div class="label">Mapped depots</div><div class="value" id="addr-stat-mapped">—</div></div></div>
+            <div class="kpi-tile"><span class="stat-icon warm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 17h20l-2 4H4z"/><path d="M5 17V8h6v9M11 11h6l2 6"/></svg></span><div><div class="label">Carriers</div><div class="value" id="carrier-stat-total">—</div></div></div>
+          </div>
+
+          <div class="grid-2 forms">
+            <div class="panel" id="user-form-panel">
+            <div class="panel-head">
+              <h2 id="user-form-title">Add user</h2>
+              <div class="seg-tabs mini" id="user-tabs" role="tablist">
+                <button type="button" class="seg-btn active" role="tab" data-utab="account">Account</button>
+                <button type="button" class="seg-btn" role="tab" data-utab="tms">TMS login</button>
+                <button type="button" class="seg-btn" role="tab" data-utab="access">Client access</button>
+              </div>
+            </div>
+            <div class="user-body">
+              <div class="field-grid" data-upane="account">
+                <div><label for="user-name">Full name</label><input id="user-name" /></div>
+                <div><label for="user-username">Username</label><input id="user-username" autocomplete="off" /></div>
+                <div><label for="user-password">Password</label><input id="user-password" type="password" autocomplete="new-password" /></div>
+                <div><label for="user-role">Role</label>
+                  <select class="form-input" id="user-role">
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                  </select></div>
+              </div>
+              <div id="user-only-block">
+                <div class="field-grid" data-upane="tms" hidden>
+                  <div><label for="user-tms-username">TMS username</label><input id="user-tms-username" autocomplete="off" /></div>
+                  <div><label for="user-tms-password">TMS password</label><input id="user-tms-password" type="password" autocomplete="new-password" /></div>
+                </div>
+                <div id="assignment-block" data-upane="access" hidden>
+                  <label for="user-client">Client access</label>
+                  <div class="grant-add-row">
+                    <div><select class="form-input" id="user-client"></select></div>
+                    <button type="button" id="add-grant-btn">+ Add</button>
+                  </div>
+                  <div class="grant-chips" id="grant-chips"></div>
+                </div>
+              </div>
+            </div>
+              <div class="form-actions">
+              <div class="msg" id="user-msg"></div>
+              <button class="primary secondary" id="cancel-edit-btn">Cancel</button>
+              <button class="primary" id="add-user-btn">Add user</button>
+            </div>
+          </div>
+            <div class="panel">
+              <div class="panel-head"><h2 id="address-form-title">Add depot address</h2></div>
+              <label for="address-name">Depot name</label>
+              <input id="address-name" placeholder="DR DEPORT" autocomplete="off" />
+              <label for="address-no">TMS address no.</label>
+              <input id="address-no" placeholder="15609" autocomplete="off" />
+              <div class="form-actions">
+                <div class="msg" id="address-msg"></div>
+                <button class="primary secondary" id="cancel-address-btn" style="display:none">Cancel</button>
+                <button class="primary" id="add-address-btn">Add address</button>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2 id="carrier-form-title">Add carrier</h2></div>
+              <label for="carrier-names">Names in the source</label>
+              <input id="carrier-names" placeholder="MAERSK, MAEU" autocomplete="off" />
+              <label for="carrier-code">TMS shortcut</label>
+              <input id="carrier-code" placeholder="MSK" autocomplete="off" />
+              <div class="form-actions">
+                <div class="msg" id="carrier-msg"></div>
+                <button class="primary secondary" id="cancel-carrier-btn" style="display:none">Cancel</button>
+                <button class="primary" id="add-carrier-btn">Add carrier</button>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2 id="goods-form-title">Add goods</h2></div>
+              <label for="goods-names">Names in the source</label>
+              <input id="goods-names" placeholder="BAGS, BAG" autocomplete="off" />
+              <label for="goods-code">TMS goods code</label>
+              <input id="goods-code" placeholder="G0018" autocomplete="off" />
+              <div class="form-actions">
+                <div class="msg" id="goods-msg"></div>
+                <button class="primary secondary" id="cancel-goods-btn" style="display:none">Cancel</button>
+                <button class="primary" id="add-goods-btn">Add goods</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="seg-tabs" role="tablist" aria-label="Master data lists">
+            <button type="button" class="seg-btn active" role="tab" data-dtab="depots">Depots &amp; carriers</button>
+            <button type="button" class="seg-btn" role="tab" data-dtab="goods">Goods</button>
+          </div>
+          <div class="grid-2 lists" data-dpane="depots">
+            <div class="panel">
+              <div class="panel-head"><h2>Depot addresses</h2></div>
+              <div id="unmapped-panel" class="unmapped" style="display:none">
+                <div class="grant-chips" id="unmapped-list"></div>
+              </div>
+              <div class="table-scroll">
+                <table id="addresses-table">
+                  <thead><tr><th>Depot name</th><th>TMS no.</th><th></th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Carriers</h2></div>
+              <div class="table-scroll">
+                <table id="carriers-table">
+                  <thead><tr><th>Shortcut</th><th>Names in the source</th><th></th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="lists" data-dpane="goods" hidden>
+            <div class="panel">
+              <div class="panel-head"><h2>Goods</h2></div>
+              <div class="table-scroll">
+                <table id="goods-table">
+                  <thead><tr><th>Code</th><th>Names in the source</th><th></th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════ VIDEOS ═══════════════════ -->
+        <section class="tab-panel" id="tab-videos">
+          <div class="panel full">
+            <div class="panel-head">
+              <div><h2>Recordings</h2><p class="panel-sub" id="videos-summary"></p></div>
+              <button class="primary secondary" id="videos-expired-btn">Delete expired now</button>
+            </div>
+            <div class="table-scroll">
+              <table id="videos-table">
+                <thead>
+                  <tr><th>When</th><th>Client</th><th>ITOS</th><th>User</th><th>Result</th><th>Size</th><th>Deleted</th><th></th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════════ AUDIT ═══════════════════ -->
+        <section class="tab-panel" id="tab-audit">
+          <div class="panel full">
+            <div class="panel-head"><h2>Activity</h2></div>
+            <div class="table-scroll">
+              <table id="audit-table">
+                <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
     </div>
-
-    <!-- ═══════════════════ CLIENTS TAB ═══════════════════ -->
-    <div class="tab-panel" id="tab-clients">
-      <div class="grid-2">
-        <div class="panel">
-          <h2 id="client-form-title">Add client</h2>
-          <div class="row">
-            <div><label for="client-name">Client name</label><input id="client-name" list="lookup-clients" autocomplete="off"
-                placeholder="pick or type, as in the source" /><datalist id="lookup-clients"></datalist></div>
-            <div><label for="client-warehouse">Warehouse</label><input id="client-warehouse" list="lookup-warehouses" autocomplete="off"
-                placeholder="pick or type, as in the source" /><datalist id="lookup-warehouses"></datalist></div>
-          </div>
-          <div class="row">
-            <div><label for="client-customer-no">TMS customer no.</label><input id="client-customer-no"
-                placeholder="e.g. K0014043" /></div>
-          </div>
-          <label>TMS trade lane no. per carrier</label>
-          <div id="tradelane-rows"></div>
-          <button type="button" class="primary secondary" id="add-lane-btn" style="margin-bottom:12px">+ Add trade lane</button>
-          <button class="primary" id="add-client-btn">Add client</button>
-          <button class="primary secondary" id="cancel-client-btn" style="display:none">Cancel edit</button>
-          <div class="msg" id="client-msg"></div>
-        </div>
-
-        <div class="stat-col">
-          <div class="stat-tile">
-            <div class="label">Total clients</div>
-            <div class="value" id="client-stat-total">—</div>
-          </div>
-          <div class="stat-tile">
-            <div class="label">Ready for TMS</div>
-            <div class="value good" id="client-stat-ready">—</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel full">
-        <h2>Shipments from the source database</h2>
-        <button class="primary secondary" id="sync-preview-btn">Preview</button>
-        <button class="primary" id="sync-run-btn">Sync from source</button>
-        <div class="msg" id="sync-msg"></div>
-        <div id="sync-detail" class="panel-sub" style="margin-top:12px"></div>
-      </div>
-
-      <div class="panel full">
-        <h2 style="margin-bottom:16px">Clients</h2>
-        <div class="table-scroll">
-          <table id="clients-table">
-            <thead>
-              <tr>
-                <th>Client</th>
-                <th>Warehouse</th>
-                <th>Customer no.</th>
-                <th>Trade lane(s)</th>
-                <th>Users</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════════════════ ADDRESSES TAB ═══════════════════ -->
-    <div class="tab-panel" id="tab-addresses">
-      <!-- row 1: depot address form | goods form -->
-      <div class="grid-2">
-        <div class="panel">
-          <h2 id="address-form-title">Add depot address</h2>
-          <label for="address-name">Depot name (as written in the source)</label>
-          <input id="address-name" placeholder="e.g. DR DEPORT" autocomplete="off" />
-          <label for="address-no">TMS address no.</label>
-          <input id="address-no" placeholder="e.g. 15609" autocomplete="off" />
-          <button class="primary" id="add-address-btn">Add address</button>
-          <button class="primary secondary" id="cancel-address-btn" style="display:none">Cancel edit</button>
-          <div class="msg" id="address-msg"></div>
-        </div>
-
-        <div class="panel">
-          <h2 id="goods-form-title">Add goods</h2>
-          <label for="goods-names">Names in the source (comma separated)</label>
-          <input id="goods-names" placeholder="e.g. BAGS, BAG" autocomplete="off" />
-          <label for="goods-code">TMS goods code</label>
-          <input id="goods-code" placeholder="e.g. G0018" autocomplete="off" />
-          <button class="primary" id="add-goods-btn">Add goods</button>
-          <button class="primary secondary" id="cancel-goods-btn" style="display:none">Cancel edit</button>
-          <div class="msg" id="goods-msg"></div>
-        </div>
-      </div>
-
-      <!-- row 2: carrier form | mapped depots + carriers -->
-      <div class="grid-2">
-        <div class="panel">
-          <h2 id="carrier-form-title">Add carrier</h2>
-          <label for="carrier-names">Names in the source (comma separated)</label>
-          <input id="carrier-names" placeholder="e.g. MAERSK, MAEU" autocomplete="off" />
-          <label for="carrier-code">TMS carrier shortcut</label>
-          <input id="carrier-code" placeholder="e.g. MSK" autocomplete="off" />
-          <button class="primary" id="add-carrier-btn">Add carrier</button>
-          <button class="primary secondary" id="cancel-carrier-btn" style="display:none">Cancel edit</button>
-          <div class="msg" id="carrier-msg"></div>
-        </div>
-
-        <div class="stat-col">
-          <div class="stat-tile">
-            <div class="label">Mapped depots</div>
-            <div class="value" id="addr-stat-mapped">—</div>
-          </div>
-          <div class="stat-tile">
-            <div class="label">Carriers</div>
-            <div class="value" id="carrier-stat-total">—</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- row 3: the depot address list | the carrier list -->
-      <div class="grid-2 lists">
-        <div class="panel">
-          <h2 style="margin-bottom:12px">Depot addresses</h2>
-          <div id="unmapped-panel" class="unmapped" style="display:none">
-            <div class="grant-chips" id="unmapped-list"></div>
-          </div>
-          <div class="table-scroll">
-            <table id="addresses-table">
-              <thead>
-                <tr>
-                  <th>Depot name</th>
-                  <th>TMS address no.</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="panel">
-          <h2 style="margin-bottom:12px">Carriers</h2>
-          <div class="table-scroll">
-            <table id="carriers-table">
-              <thead>
-                <tr>
-                  <th>TMS shortcut</th>
-                  <th>Names in the source</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- row 4: the goods list -->
-      <div class="panel full">
-        <h2 style="margin-bottom:12px">Goods</h2>
-        <div class="table-scroll">
-          <table id="goods-table">
-            <thead>
-              <tr>
-                <th>TMS code</th>
-                <th>Names in the source</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════════════════ VIDEOS TAB ═══════════════════ -->
-    <div class="tab-panel" id="tab-videos">
-      <div class="panel full">
-        <h2 style="margin-bottom:6px">Job videos</h2>
-        <div style="display:flex; gap:12px; align-items:center; margin-bottom:14px; flex-wrap:wrap">
-          <span id="videos-summary" class="panel-sub" style="margin:0"></span>
-          <button class="primary secondary" id="videos-expired-btn">Delete expired now</button>
-        </div>
-        <div class="table-scroll">
-          <table id="videos-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Client</th>
-                <th>ITOS</th>
-                <th>User</th>
-                <th>Result</th>
-                <th>Size</th>
-                <th>Deleted</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════════════════ AUDIT TAB ═══════════════════ -->
-    <div class="tab-panel" id="tab-audit">
-      <div class="panel full">
-        <h2 style="margin-bottom:16px">Audit log</h2>
-        <div class="table-scroll">
-          <table id="audit-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Who</th>
-                <th>Action</th>
-                <th>Target</th>
-                <th>Detail</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </main>
+  </div>
 
   <div id="modal-overlay" class="modal-overlay">
     <div id="modal" class="modal">
@@ -484,14 +523,7 @@
           <table id="modal-table">
             <colgroup><col style="width:120px"><col style="width:130px"><col style="width:110px"><col><col style="width:90px"><col style="width:200px"></colgroup>
             <thead>
-              <tr>
-                <th>Finished</th>
-                <th>ITOS</th>
-                <th>File No.</th>
-                <th>Orders</th>
-                <th>Status</th>
-                <th>Note</th>
-              </tr>
+              <tr><th>Finished</th><th>ITOS</th><th>File No.</th><th>Orders</th><th>Status</th><th>Note</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -502,6 +534,7 @@
 
   <script src="/auth/client.js"></script>
   <script src="/static/js/video_player.js"></script>
+  <script src="/admin/mapping.js"></script>
   <script src="/admin/admin.js"></script>
 </body>
 
