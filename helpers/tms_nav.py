@@ -123,6 +123,8 @@ def open_new_order(page, *, timeout: int = 60, on_event=None, create: bool = Tru
         return False
 
     state = "unknown"
+    orders_clicked = False          # Orders has been clicked once: from here on we are heading for the list's New
+    menu_clicks = 0                 # times the Order Management menu was opened (the hidden-Orders exception)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -141,26 +143,29 @@ def open_new_order(page, *, timeout: int = 60, on_event=None, create: bool = Tru
                 state = "home"
                 if due("orders", 4):
                     emit("home", "On the home page — opening Orders.")
+                    orders_clicked = True
                     try:
                         orders.click(timeout=5000)
                     except Exception as e:
                         logger.warning("Clicking Orders failed: %s", e)
                 break
 
-            # 2b. HOME page, but the Orders button is hidden (it only shows once the "Order Management" menu is
-            # open — after sign-in it is sometimes collapsed). Open that menu; Orders then appears and step 2
-            # clicks it. This must come BEFORE step 3: the Home page has its own "+ New" action, which is not the
-            # Orders list's New. A page stacked on top (the Orders list) covers this caption, so it is not matched there.
-            menu = _on_top_match(frame.locator(".ms-navbar-node-caption").filter(has_text=_ORDER_MANAGEMENT))
-            if menu is not None:
-                state = "home_menu"
-                if due("menu", 5):
-                    emit("home", "Orders is hidden — opening the Order Management menu.")
-                    try:
-                        menu.click(timeout=5000)
-                    except Exception as e:
-                        logger.warning("Clicking Order Management failed: %s", e)
-                break
+            # 2b. THE EXCEPTION: on the home page the Orders button is sometimes hidden (it only shows once the
+            # "Order Management" menu is open). Open that menu once; Orders then appears and step 2 clicks it.
+            # Only before Orders has been clicked: on the Orders list the Order Management caption is still on the
+            # screen, and clicking it there would loop back to Home. At most twice (a retry if Orders stays hidden).
+            if not orders_clicked and menu_clicks < 2:
+                menu = _on_top_match(frame.locator(".ms-navbar-node-caption").filter(has_text=_ORDER_MANAGEMENT))
+                if menu is not None:
+                    state = "home_menu"
+                    if due("menu", 5):
+                        menu_clicks += 1
+                        emit("home", "Orders is hidden — opening the Order Management menu.")
+                        try:
+                            menu.click(timeout=5000)
+                        except Exception as e:
+                            logger.warning("Clicking Order Management failed: %s", e)
+                    break
 
             # 3. ORDERS list: "+ New".
             new = _first_visible(frame, ("menuitem", "button"), _NEW_BUTTON)
