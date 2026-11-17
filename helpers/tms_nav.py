@@ -35,6 +35,7 @@ logger = logging.getLogger("tms_nav")
 POLL_SECONDS = 0.4
 
 _ORDERS_MENU = re.compile(r"^Orders(,|\s*$)", re.I)       # "Orders, Executes the Orders"
+_ORDER_MANAGEMENT = re.compile(r"^\s*Order Management\s*$", re.I)   # the Home page's menu that holds Orders
 _NEW_BUTTON = re.compile(r"^New\s*$", re.I)               # exactly "New" — not "New Order", "New Quote"
 _CUSTOMER_NAME = re.compile(r"^Customer Name", re.I)      # the order card's Customer Name combobox
 
@@ -144,6 +145,21 @@ def open_new_order(page, *, timeout: int = 60, on_event=None, create: bool = Tru
                         orders.click(timeout=5000)
                     except Exception as e:
                         logger.warning("Clicking Orders failed: %s", e)
+                break
+
+            # 2b. HOME page, but the Orders button is hidden (it only shows once the "Order Management" menu is
+            # open — after sign-in it is sometimes collapsed). Open that menu; Orders then appears and step 2
+            # clicks it. This must come BEFORE step 3: the Home page has its own "+ New" action, which is not the
+            # Orders list's New. A page stacked on top (the Orders list) covers this caption, so it is not matched there.
+            menu = _on_top_match(frame.locator(".ms-navbar-node-caption").filter(has_text=_ORDER_MANAGEMENT))
+            if menu is not None:
+                state = "home_menu"
+                if due("menu", 5):
+                    emit("home", "Orders is hidden — opening the Order Management menu.")
+                    try:
+                        menu.click(timeout=5000)
+                    except Exception as e:
+                        logger.warning("Clicking Order Management failed: %s", e)
                 break
 
             # 3. ORDERS list: "+ New".
