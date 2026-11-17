@@ -254,6 +254,7 @@ class Shipment(Base):
     client_ref = Column(String(120), nullable=True)
     tms_customer_ref = Column(String(120), nullable=True)   # source tms_customer_ref, offered to the mapping
     forwarder = Column(String(120), nullable=True)          # source forwarder, offered to the mapping
+    adr_nadr = Column(String(40), nullable=True)            # source adr_nadr (ADR / NADR), offered to the mapping
     bl_number = Column(String(120), nullable=False)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
@@ -295,7 +296,7 @@ class Shipment(Base):
 
 class ShipmentContainer(Base):
     """One container of a shipment — and one TMS order (1 original + N-1 copies). The
-    cargo (goods / qty / gross weight) lives here so a container may carry its own."""
+    cargo (goods / qty / gross and net weight) lives here so a container may carry its own."""
     __tablename__ = "shipment_containers"
     __table_args__ = (UniqueConstraint("shipment_id", "container_no", name="uq_container_shipment"),)
 
@@ -307,6 +308,7 @@ class ShipmentContainer(Base):
     goods = Column(String(120), nullable=True)
     qty = Column(Numeric(14, 3), nullable=True)
     gross_weight = Column(Numeric(14, 3), nullable=True)
+    net_weight = Column(Numeric(14, 3), nullable=True)     # source net_weight; typed in Order Cargo only when mapped
     # This container's own Depot Out address when it differs from the shipment's (usually the only thing
     # that does): the order is created with the shipment's depot out and this container's order is then
     # corrected in its Lines. Empty = same as the shipment.
@@ -321,6 +323,7 @@ class ShipmentContainer(Base):
     client_ref = Column(String(120), nullable=True)
     tms_customer_ref = Column(String(120), nullable=True)
     forwarder = Column(String(120), nullable=True)
+    adr_nadr = Column(String(40), nullable=True)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
     country_of_origin = Column(String(10), nullable=True)

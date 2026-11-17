@@ -13,7 +13,7 @@ Source column -> our column
                                       so nothing else is transferred. No client is ever created here.
     bl_number                      -> Shipment.bl_number (the group key)           itos_no -> Shipment.itos_no
     client_ref, carrier, vessel_name, country_of_origin, country_of_destination, closing_date,
-    tms_customer_ref, forwarder    -> same name
+    tms_customer_ref, forwarder, adr_nadr -> same name
     ata_date                       -> Shipment.depot_out_from
     pick_up_until                  -> Shipment.vgm_closing_date
     Every value below can differ between the containers of a BL (the source says it per row): the shipment keeps the
@@ -27,7 +27,9 @@ Source column -> our column
     empty_return_reference         -> Shipment.depot_in_reference (the In Ref) and, when a container differs, its own
     depot_out_address, depot_in_address -> same name; empty_return_reference -> depot_in_reference. The shipment takes
                                       the first value; a container whose own value differs keeps it
-    container_no/type, seal_no, goods, qty, gross_weight -> ShipmentContainer
+    container_no/type, seal_no, goods, qty, gross_weight, net_weight -> ShipmentContainer
+    goods empty                    -> adr_nadr is used as the goods (clients that write their goods there)
+                                      (net_weight is text in the source: read as a number; unreadable = left empty)
     count                          -> not used
 
 Safety: the source is only read. A shipment that is queued/running/done, or that already has anything in TMS
@@ -54,7 +56,7 @@ COLUMNS = ["client_name", "warehouse", "itos_no", "count", "container_no", "cont
            "gross_weight", "client_ref", "bl_number", "carrier", "vessel_name", "country_of_origin",
            "country_of_destination", "pick_up_from", "pick_up_until", "closing_date", "depot_out_address",
            "pickup_quay", "empty_return_reference", "depot_in_address", "ata_date", "tms_customer_ref",
-           "forwarder"]
+           "forwarder", "adr_nadr", "net_weight"]
 
 # shipment column <- source column (the same value on every row of a BL; the first non-empty one wins)
 SHIPMENT_MAP = {
@@ -64,9 +66,10 @@ SHIPMENT_MAP = {
     "depot_out_date": "pick_up_from", "depot_in_date": "pick_up_from",
     "depot_in_reference": "empty_return_reference", "depot_out_address": "depot_out_address",
     "depot_in_address": "depot_in_address", "tms_customer_ref": "tms_customer_ref",
-    "forwarder": "forwarder",
+    "forwarder": "forwarder", "adr_nadr": "adr_nadr",
 }
-CONTAINER_FIELDS = ["container_type", "seal_no", "goods", "qty", "gross_weight"]
+CONTAINER_FIELDS = ["container_type", "seal_no", "goods", "qty", "gross_weight", "net_weight"]
+WEIGHTS = ("qty", "gross_weight", "net_weight")       # numbers; a container on several rows adds them together
 # Everything in SHIPMENT_MAP (except the ITOS number) plus the two derived values may differ per container of a BL:
 # the shipment keeps the first container's value, a container whose value differs keeps its own (same column name).
 PER_CONTAINER = [k for k in SHIPMENT_MAP if k != "itos_no"] + ["remarks", "depot_out_reference"]
@@ -132,9 +135,9 @@ def parse_row(raw: dict, warn: list | None = None) -> dict:
     that cannot be placed at all (no client, or neither BL nor ITOS number) raises ValueError."""
     warn = warn if warn is not None else []
     r = {k: clean_text(raw.get(k)) for k in COLUMNS if k not in ("pick_up_from", "pick_up_until", "closing_date",
-                                                           "ata_date", "qty", "gross_weight", "count")}
+                                                           "ata_date", "count", *WEIGHTS)}
     for k, conv in (("pick_up_from", parse_date), ("pick_up_until", parse_date), ("closing_date", parse_date),
-                    ("ata_date", parse_date), ("qty", parse_number), ("gross_weight", parse_number)):
+                    ("ata_date", parse_date), *((w, parse_number) for w in WEIGHTS)):
         try:
             r[k] = conv(raw.get(k))
         except ValueError as e:
@@ -147,6 +150,10 @@ def parse_row(raw: dict, warn: list | None = None) -> dict:
             raise ValueError("neither a BL number nor an ITOS number — cannot tell which shipment it belongs to")
         r["bl_number"] = r["itos_no"]              # stands in until the source has the BL; see _sync_group
         r["bl_missing"] = True
+    # some clients write their goods in adr_nadr ("NADR") and leave goods empty: it stands in only then, so a client
+    # whose goods column has a value never changes
+    if not r["goods"] and r["adr_nadr"]:
+        r["goods"] = r["adr_nadr"]
     r["warehouse"] = r["warehouse"] or ""
     r["container_no"] = r["container_no"].upper().replace(" ", "") if r["container_no"] else None
     return r
@@ -231,7 +238,7 @@ def _merge_duplicates(bl, rows, result) -> list:
         else:
             first = by_no[cn]
             count[cn] += 1
-            for k in ("qty", "gross_weight"):
+            for k in WEIGHTS:
                 if r[k] is not None:
                     first[k] = r[k] + (first[k] or 0)
             for k, v in r.items():

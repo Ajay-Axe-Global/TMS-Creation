@@ -6,7 +6,7 @@ Starts on the EMPTY NEW-ORDER CARD (helpers/tms_nav.open_new_order has already g
     1) General   customer -> trade lane pop-up, fields, VAT prompts          5) Calculate Revenues
     2) Attach    arrival notice dropped on the Document Types zone           6) Copy Order x (N-1)       } only
     3) Lines     depot addresses, refs, booked dates                         7) Copy Orders overview     } with
-    4) Cargo     goods, quantity, gross weight                               8) File No. from the card   } more
+    4) Cargo     goods, qty, gross / net weight                          8) File No. from the card   } more
                                                                              9) Back -> list             } than
     ONE container: the card IS the order; its number is read from the        10) filter by File No.      } one
     header, Container No. + Seal No. are typed on the same card.             11) per order: Container No. + Seal No.
@@ -35,6 +35,7 @@ from pathlib import Path
 
 from engine import catalog
 from helpers import tms_nav
+from helpers.convert import date_order
 from helpers.flow_errors import FlowFailed
 
 logger = logging.getLogger("tms_creation")
@@ -113,6 +114,47 @@ _INPUT = "input:not([type=checkbox]):not([type=hidden]), select"
 
 def norm(s) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+
+# ── dates as TMS shows them ─────────────────────────────────────────────────────────────────────────────────────────
+# What we type ("11/19/2026" or "11/19/2026 10:00") and what a cell then shows depends on the signed-in TMS account's
+# regional settings: "11/18/2026 10:00 AM" for one account, "19/11/2026 0:00" for another. Whether a cell "has our value"
+# is therefore decided on the DATE (and the time, when we typed one), never on the text.
+_DT_RE = re.compile(r"(\d{1,4})\s*[/.\-]\s*(\d{1,2})\s*[/.\-]\s*(\d{1,4})(?:[\sT,]+(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)?)?", re.I)
+_DATE_COLUMNS = {"Booked DateTime From", "Booked DateTime Until", "Closing Date Time"}
+
+
+def _dt_parts(text):
+    """(year, (first number, second number) as written, minutes since midnight or None) — None when there is no date."""
+    m = _DT_RE.search(text or "")
+    if not m:
+        return None
+    a, b, c = int(m[1]), int(m[2]), int(m[3])
+    if len(m[1]) == 4:
+        year, pair = a, (b, c)
+    elif len(m[3]) == 4:
+        year, pair = c, (a, b)
+    else:
+        return None
+    minutes = None
+    if m[4] is not None:
+        h, mi, ap = int(m[4]), int(m[5]), (m[6] or "").lower()
+        h = h + 12 if ap == "pm" and h < 12 else 0 if ap == "am" and h == 12 else h
+        minutes = h * 60 + mi
+    return year, pair, minutes
+
+
+def same_datetime(typed, shown) -> bool:
+    """True when the cell text `shown` is the date (and time) we typed, whichever order or clock TMS displays it in.
+    The day and month are compared in either order, so a day-first display of a month-first value still matches."""
+    t, s = _dt_parts(typed), _dt_parts(shown)
+    if t is None or s is None:
+        return False
+    (ty, tp, tm), (sy, sp, sm) = t, s
+    month, day = tp if date_order() == "mdy" else (tp[1], tp[0])
+    if ty != sy or (month, day) not in {(sp[0], sp[1]), (sp[1], sp[0])}:
+        return False
+    return tm is None or sm is None or tm == sm
 
 
 class _Stop(Exception):
@@ -769,7 +811,6 @@ class Creation:
             if r is None:
                 break
             td = r.locator("td").nth(idx)
-            td.scroll_into_view_if_needed()
             target = td.locator("span.stringcontrol-read, a, input").first
             try:
                 (target if target.count() else td).click(timeout=3000)
@@ -833,10 +874,22 @@ class Creation:
         if not value:
             return
         try:
-            self.commit_cell(caption, key, abbr, value, lookup=lookup, settle=settle)
+            try:
+                self.commit_cell(caption, key, abbr, value, lookup=lookup, settle=settle)
+            except Exception as first:
+                # one more try from a clean state (nothing open; the cell is scrolled to again before it is used)
+                logger.info("%s / %s: %s — trying once more", line, abbr, str(first).splitlines()[0])
+                self.close_date_picker()
+                self.blur_active()
+                self.wait(0.5)
+                self.commit_cell(caption, key, abbr, value, lookup=lookup, settle=settle)
             clean = lambda s: re.sub(r"[.,]", "", norm(s))
             now = lambda: self.cell_text(self.cell(caption, key, abbr))
-            ok = self.until(check, 2.0) if check else clean(value) in clean(now())    # only for the log; never blocks the next field
+            # only for the log; never blocks the next field. A date is compared as a date: TMS may show it in another
+            # order / clock than we typed it (see same_datetime)
+            ok = (self.until(check, 2.0) if check
+                  else same_datetime(value, now()) if abbr in _DATE_COLUMNS
+                  else clean(value) in clean(now()))
             self.L(section, Line=line, Field=abbr, Value=value, Actual=now(),
                    Extra=extra() if extra else "", Status="OK" if ok else "CHECK")
         except Exception as e:
@@ -853,6 +906,8 @@ class Creation:
         self.grid("Lines").scroll_into_view_if_needed()
         self.wait(0.5)
         cap = "Lines"
+        # the row of every line first (their keys do not change while the cells are filled)
+        todo = []                                            # (line, rowkey), top to bottom
         for ln in lines:
             def find_row():
                 i = self.col_idx(cap, "Action Code")
@@ -864,34 +919,101 @@ class Creation:
             if not row:
                 self.L("Lines", Line=ln["action"], Status="ROW NOT FOUND")
                 continue
-            key = row.get_attribute("rowkey", timeout=READ_MS)
-            if norm(ln["action"]) == "unload":
-                # TMS fills the UNLOAD row's address itself; only its booked dates are entered (the Depot Out date)
-                self.type_booked("UNLOAD", cap, key, "From", ln.get("bookedFrom"))
-                self.type_booked("UNLOAD", cap, key, "Until", ln.get("bookedUntil"))
-                continue
+            todo.append((ln, row.get_attribute("rowkey", timeout=READ_MS)))
+        is_unload = lambda ln: norm(ln["action"]) == "unload"
+
+        # The grid is wide and is NOT scrolled by the bot. It is filled strictly left to right, so the screen only ever
+        # has to move one way (TMS follows the cell being typed in):
+        #   1. DEPOT OUT  Address No., Ref           (left columns)
+        #   2. DEPOT IN   Address No., Ref
+        #   3. DEPOT OUT  Booked From / Until, Closing   (right columns)
+        #   4. DEPOT IN   Booked From / Until, Closing
+        #   5. the remaining rows' dates (UNLOAD, DROP OFF, UNLOAD WH, PICK UP ...)
+        depots = [(ln, key) for ln, key in todo if not is_unload(ln)]
+        depots.sort(key=lambda d: 0 if norm(d[0]["action"]) == "depot out" else 1)   # DEPOT OUT before DEPOT IN
+
+        # 1-2. the left columns: Address No. and Ref (the UNLOAD row has no address of its own: TMS fills it)
+        for ln, key in depots:
             val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
             self.step("Lines", ln["action"], cap, key, "Address No.", ln.get("addressNo"), lookup=True, settle=0.6,
                       extra=lambda v=val: f"{v('Address Name')} / {v('Address City')}",
                       check=lambda v=val: norm(v("Address Name")))
             self.step("Lines", ln["action"], cap, key, "Order Line Ref 1", ln.get("ref1"))
+
+        # 3-4. the right columns: Booked From / Until, then the Closing check
+        for ln, key in depots:
+            val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
             self.step("Lines", ln["action"], cap, key, "Booked DateTime From", ln.get("bookedFrom"), settle=0.6,
                       extra=lambda v=val: "Until: " + v("Booked DateTime Until"))
             if ln.get("bookedUntil"):
-                # TMS copies "From" into "Until" by itself; retype only when it did not (or the values differ)
-                cur = lambda: norm(self.cell_text(self.cell(cap, key, "Booked DateTime Until")))
-                if self.until(lambda: norm(ln["bookedUntil"]) in cur(), 1.0):
+                # TMS copies "From" into "Until" by itself; retype only when it did not (or the values differ).
+                # Compared as dates: TMS shows them in the signed-in account's own format.
+                cur = lambda: self.cell_text(self.cell(cap, key, "Booked DateTime Until"))
+                if self.until(lambda: same_datetime(ln["bookedUntil"], cur()), 1.0):
                     self.L("Lines", Line=ln["action"], Field="Booked DateTime Until", Value=ln["bookedUntil"],
                            Actual=cur(), Extra="filled by TMS", Status="OK")
                 else:
                     self.step("Lines", ln["action"], cap, key, "Booked DateTime Until", ln["bookedUntil"], settle=0.6)
             self.ensure_closing(cap, key, ln["action"])
+
+        # 5. the remaining rows: their dates only
+        for ln, key in todo:
+            if is_unload(ln):
+                self.type_booked("UNLOAD", cap, key, "From", ln.get("bookedFrom"))
+                self.type_booked("UNLOAD", cap, key, "Until", ln.get("bookedUntil"))
         other = self.data.get("otherLines") or {}
         if other:
             self.fill_other_lines(other.get("bookedFrom"), other.get("bookedUntil"))
+        self.verify_lines(todo)
         self.close_date_picker()
         self.blur_active()
         self.wait(1.0)
+
+    def verify_lines(self, todo):
+        """The Lines are read back before the order goes on to Cargo and the copies. Every depot line cell that is empty
+        or does not show what was meant is typed once more; one that STILL is not right is logged. A depot line whose
+        Address No. cannot be put right stops the run here — the copies would inherit the wrong (or no) address and the
+        shipment would end up "Created" with it — so the order stays in TMS for a person to finish, like any other
+        stopped run."""
+        cap = "Lines"
+        closing = self.data.get("closingDatetime")
+
+        def read(key, abbr):
+            return self.cell_text(self.cell(cap, key, abbr))     # read from the page: needs no scrolling
+
+        def right(kind, want, got):
+            if kind == "date":
+                return same_datetime(want, got)
+            if kind == "present":
+                return bool(norm(got))
+            return norm(got) == norm(want)
+
+        unsure = []
+        for ln, key in todo:
+            if norm(ln["action"]) == "unload":
+                continue
+            action = ln["action"]
+            checks = (("Address No.", ln.get("addressNo"), "text"), ("Order Line Ref 1", ln.get("ref1"), "text"),
+                      ("Booked DateTime From", ln.get("bookedFrom"), "date"),
+                      ("Booked DateTime Until", ln.get("bookedUntil"), "date"),
+                      ("Closing Date Time", closing, "present"))    # Closing is TMS's own copy of General: only "filled"
+            for abbr, want, kind in checks:
+                if not want:
+                    continue
+                got = read(key, abbr)
+                if right(kind, want, got):
+                    continue
+                self.L("Verify", Line=action, Field=abbr, Value=want, Actual=got, Status="EMPTY — typing it again"
+                       if not norm(got) else "DIFFERENT — typing it again")
+                self.step("Lines", action, cap, key, abbr, want, lookup=(abbr == "Address No."), settle=0.6)
+                got = read(key, abbr)
+                fixed = right(kind, want, got)
+                self.L("Verify", Line=action, Field=abbr, Value=want, Actual=got,
+                       Status="OK — put right" if fixed else "STILL WRONG")
+                if not fixed and abbr == "Address No.":
+                    unsure.append(f"{action} Address No. is '{got or 'empty'}', expected '{want}'")
+        if unsure:
+            raise _Stop("Lines are not right: " + "; ".join(unsure) + " — check the order in TMS")
 
     def ensure_closing(self, cap, key, action):
         """TMS copies the General tab's Closing Datetime into the Closing Date Time column of the depot lines. Check it
@@ -948,7 +1070,7 @@ class Creation:
             return
         abbr, control = f"Booked DateTime {which}", f"BookedDateTime{which}"
         shown = lambda: self.cell_text(self.cell(cap, key, abbr))
-        took = lambda: norm(value) in norm(shown())
+        took = lambda: same_datetime(value, shown())          # a date, whatever order / clock TMS shows it in
         how = None
         try:
             # the value is already there: TMS copied "From" into "Until", or the row came with it
@@ -1082,6 +1204,8 @@ class Creation:
                       check=lambda v=val, g=C.get("goodNo"): norm(v("Good No.")) == norm(g))
             self.step("Cargo", n + 1, cap, key, "Quantity", str(C.get("quantity") or ""))
             self.step("Cargo", n + 1, cap, key, "Gross Weight", str(C.get("grossWeight") or ""))
+            # only for clients whose mapping fills it; an empty value is skipped by step() and the cell left alone
+            self.step("Cargo", n + 1, cap, key, "Net Weight", str(C.get("netWeight") or ""))
         self.blur_active()
         self.wait(1.0)
 
@@ -1501,9 +1625,25 @@ class Creation:
             self.type_text(combo, "File No.")
             opt = self.until(self.file_no_option, 2.5)
         if opt:
-            opt.scroll_into_view_if_needed()
-            opt.click()
+            # The option is found by tag and clicked at once: BC redraws this list while it is open, and a tag that
+            # was removed in between made the old scroll-into-view wait the whole 15 s. Look it up again per try.
+            for _ in range(3):
+                o = self.file_no_option()
+                if o is None:
+                    break
+                try:
+                    o.click(timeout=3000)
+                    break
+                except Exception as e:
+                    logger.info("File No. option click failed (%s) — looking it up again", str(e).splitlines()[0])
+                    self.wait(0.3)
             self.until(self.file_no_filter_input, 3.0)
+            if not self.file_no_filter_input() and combo:
+                self.type_text(combo, "File No.")
+                o = self.until(self.file_no_option, 2.5)
+                if o is not None:
+                    o.click(timeout=3000)
+                    self.until(self.file_no_filter_input, 3.0)
         elif combo and norm(combo.input_value(timeout=READ_MS)) == "file no.":
             combo.press("Enter")
             self.until(self.file_no_filter_input, 3.0)
@@ -1735,7 +1875,8 @@ class Creation:
         for key, value in (c.get("general") or {}).items():
             if value and value != str(self.data.get(key) or ""):
                 changes["general:" + key] = value
-        for key, dkey in (("goodNo", "goodNo"), ("quantity", "quantity"), ("grossWeight", "grossWeight")):
+        for key, dkey in (("goodNo", "goodNo"), ("quantity", "quantity"), ("grossWeight", "grossWeight"),
+                          ("netWeight", "netWeight")):
             if str(c.get(key) or "") != str(cargo.get(dkey) or "") and c.get(key):
                 changes[key] = str(c[key])
         return changes
@@ -1798,7 +1939,7 @@ class Creation:
         if "other_date" in changes or "other_until" in changes:
             self.ensure_pane("Lines", lambda: self.grid("Lines"))
             self.fill_other_lines(changes.get("other_date"), changes.get("other_until"))
-        if any(k in changes for k in ("goodNo", "quantity", "grossWeight")):
+        if any(k in changes for k in ("goodNo", "quantity", "grossWeight", "netWeight")):
             cap = "Order Cargo"
             self.ensure_pane(cap, lambda: self.grid(cap))
             def first():
@@ -1818,6 +1959,8 @@ class Creation:
                     self.replace_cell("Cargo", 1, cap, key, "Quantity", changes["quantity"])
                 if "grossWeight" in changes:
                     self.replace_cell("Cargo", 1, cap, key, "Gross Weight", changes["grossWeight"])
+                if "netWeight" in changes:
+                    self.replace_cell("Cargo", 1, cap, key, "Net Weight", changes["netWeight"])
         if "remarks" in changes:
             self.set_remarks(changes["remarks"])
         self.close_date_picker()

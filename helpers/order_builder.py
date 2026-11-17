@@ -11,13 +11,14 @@ what format, with which separator and time — in these module-level functions. 
                   their texts; a line not returned is left alone. The TMS address no. is added here, from the depot.
                   "OTHERS": {"bookedFrom", "bookedUntil"} = every other row of the grid (DROP OFF, PICK UP, UNLOAD WH
                   ... however many TMS generated) gets those booked dates
-    cargo(v)    -> {"goodNo", "quantity", "grossWeight"}   the Order Cargo line (optional; no goodNo = no cargo line)
+    cargo(v)    -> {"goodNo", "quantity", "grossWeight", "netWeight"}   the Order Cargo line (optional; no goodNo = no
+                  cargo line; a value not returned / empty is left alone)
     remarks(v)  -> text                    the Order Remarks line (optional)
     SAME_FOR_ALL = ["container_type"]      container values that must be identical, because the first order is copied
 
 What `v` offers (see Values): client_ref, itos_no, bl_number, carrier, carrier_code (the TMS shortcut), vessel_name,
 country_of_origin, country_of_destination, closing_date, depot_out_from, vgm_closing_date, remarks, container_no,
-container_type, seal_no, goods, goods_code (the TMS code), qty, gross_weight, and depot_out / depot_in with .name,
+container_type, seal_no, goods, goods_code (the TMS code), qty, gross_weight, net_weight, adr_nadr, and depot_out / depot_in with .name,
 .address_no, .reference, .date. Dates are ISO text: format them with helpers.convert.tms_date / date_time, join values
 with helpers.convert.join. What stays here, the same for every customer: where each value goes, one container versus
 many, which depot is on which line, and what each copied order must be corrected to.
@@ -40,7 +41,7 @@ LINE_ACTIONS = ("DEPOT OUT", "UNLOAD", "DEPOT IN")              # the Lines rows
 OTHER_LINES = "OTHERS"        # every Lines row that is not DEPOT OUT / DEPOT IN (TMS may generate any number of them,
                               # even with the same action code twice): lines(v) gives them only booked dates
 LINE_VALUES = {"ref", "bookedFrom", "bookedUntil"}
-CARGO_VALUES = {"goodNo", "quantity", "grossWeight"}
+CARGO_VALUES = {"goodNo", "quantity", "grossWeight", "netWeight"}
 DEFAULT_SAME_FOR_ALL = ("container_type",)                      # the flow copies the first order, so the type is shared
 VALUE_NAMES = catalog.FLAT_VALUE_NAMES                          # the plain values every container carries
 
@@ -196,7 +197,8 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
     # ── Order Cargo: one line, from the first container ──
     cg = cargo_of(first)
     data["cargo"] = ([{"goodNo": cg["goodNo"], "quantity": cg.get("quantity") or "",
-                       "grossWeight": cg.get("grossWeight") or ""}] if cg.get("goodNo") else [])
+                       "grossWeight": cg.get("grossWeight") or "",
+                       "netWeight": cg.get("netWeight") or ""}] if cg.get("goodNo") else [])
 
     # ── Order Remarks: one line (the first container's remarks; a container whose own differ is corrected later) ──
     data["remarks"] = remarks_of(first)
@@ -225,7 +227,7 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
                 "depotOutNo": out_no, "depotOutRef": out_ref, "depotOutDate": out_booked,
                 "depotInNo": in_no, "depotInRef": in_ref, "depotInDate": in_booked,
                 "goodNo": _text(cg.get("goodNo")), "quantity": cg.get("quantity") or "",
-                "grossWeight": cg.get("grossWeight") or ""}
+                "grossWeight": cg.get("grossWeight") or "", "netWeight": cg.get("netWeight") or ""}
 
     return {"data": data, "containers": [container(c) for c in containers], "calcRevenues": True}
 

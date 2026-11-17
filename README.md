@@ -109,6 +109,8 @@ Do Case 1 first, then add the field. If the value already exists on `v`, you onl
 > **Step 2 is applied on the next start.** A new column that may be empty (`nullable=True`, no default) is added to the
 > existing table automatically (`database/db.py` → `_add_new_columns`). A required column, a type change or a removed
 > column is still refused at startup: alter that table by hand. A new table is simply created.
+> The same changes are written out as SQL in `database/upgrade.sql` (safe to run more than once) for an existing
+> production database; add a line there for every new column. A fresh database needs none of it.
 >
 > To offer the value in the Admin mapping dropdown, also add it to `SOURCE_VALUES` in `engine/catalog.py` (that also
 > makes it available as `v.<name>` in client files, so step 4 is automatic).
