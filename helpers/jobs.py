@@ -50,7 +50,7 @@ def _depot(session, name, reference, date, problems, label):
 
 
 # General values a container may carry on its own when they differ from the shipment's (the same names as the columns)
-OWN_VALUES = ("client_ref", "tms_customer_ref", "forwarder", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
+OWN_VALUES = ("client_ref", "tms_customer_ref", "forwarder", "adr_nadr", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
               "depot_out_from", "vgm_closing_date", "remarks")
 
 
@@ -111,6 +111,7 @@ def build_payload(session, client: Client, shipment: Shipment):
         "shipment": {
             "id": shipment.id, "itos_no": shipment.itos_no, "client_ref": shipment.client_ref,
             "tms_customer_ref": shipment.tms_customer_ref, "forwarder": shipment.forwarder,
+            "adr_nadr": shipment.adr_nadr,
             "bl_number": shipment.bl_number, "carrier": shipment.carrier, "carrier_code": code_of(shipment.carrier), "vessel_name": shipment.vessel_name,
             "country_of_origin": shipment.country_of_origin,
             "country_of_destination": shipment.country_of_destination,
@@ -123,7 +124,7 @@ def build_payload(session, client: Client, shipment: Shipment):
         },
         "containers": [{"id": c.id, "container_no": c.container_no, "container_type": c.container_type,
                         "seal_no": c.seal_no, "goods": c.goods, "qty": _num(c.qty),
-                        "gross_weight": _num(c.gross_weight),
+                        "gross_weight": _num(c.gross_weight), "net_weight": _num(c.net_weight),
                         **_own_values(c),
                         "carrier_code": code_of(c.carrier) if c.carrier else None,     # None = the shipment's
                         # only when this container's Depot Out / In differs from the shipment's

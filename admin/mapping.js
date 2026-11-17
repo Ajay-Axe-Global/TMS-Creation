@@ -170,7 +170,7 @@
   const PANE_TEXT = {
     general: ["General", "The order's header fields. Container No. and Seal No. are each container's own; the rest come from the first container and are corrected on the copies where a container differs."],
     lines: ["Lines", "Depot Out and Depot In get their address (from the depot), reference and booked date. Every other row TMS generates only gets a booked date."],
-    cargo: ["Goods", "The goods line of each order: the TMS goods code, quantity and gross weight."],
+    cargo: ["Goods", "The goods line of each order: the TMS goods code, quantity, gross weight and (only if mapped) net weight."],
     remarks: ["Order remarks", "The remark line of each order."],
     rules: ["Rules", "Checks made when someone clicks Create, before anything is sent to TMS."],
     preview: ["Preview", "See the exact text for one of the client's shipments."],
@@ -376,7 +376,7 @@
       <div class="pv-grid"><div>${rows("General (first order)", r.general.map(g => tr(g.label, g.value)))}</div><div>
       ${rows("Lines", r.lines.map(l => tr(l.row, `address ${l.address_no || "—"} · ref ${l.ref || "—"} · from ${l.booked_from || "—"} · until ${l.booked_until || "—"}`))
         .concat(r.other_rows ? [tr("All other rows", `from ${r.other_rows.bookedFrom || "—"} · until ${r.other_rows.bookedUntil || "—"}`)] : []))}
-      ${rows("Goods", r.cargo.map(c => tr(`Cargo ${c.goodNo || ""}`, `quantity ${c.quantity || "—"} · gross weight ${c.grossWeight || "—"}`)))}
+      ${rows("Goods", r.cargo.map(c => tr(`Cargo ${c.goodNo || ""}`, `quantity ${c.quantity || "—"} · gross weight ${c.grossWeight || "—"}${c.netWeight ? ` · net weight ${c.netWeight}` : ""}`)))}
       ${rows("Remarks", r.remarks ? [tr("Remarks", r.remarks)] : [])}
       ${rows("Per container", r.containers.map(c => tr(c.container_no, `typed container no. ${c.typed_container_no} · seal ${c.seal_no || "—"}`)))}</div></div>`;
     say("", true);

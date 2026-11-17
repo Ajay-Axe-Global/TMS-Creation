@@ -66,6 +66,7 @@ CARGO = (
     Field("goodNo", "Good No.", kind="lookup"),
     Field("quantity", "Quantity", kind="number"),
     Field("grossWeight", "Gross Weight", kind="number"),
+    Field("netWeight", "Net Weight", kind="number"),       # typed only when the client's mapping fills it
 )
 REMARKS = Field("text", "Remarks")
 
@@ -74,6 +75,7 @@ SOURCE_VALUES = (
     ("client_ref", "Client ref", "text"),
     ("tms_customer_ref", "TMS customer ref", "text"),
     ("forwarder", "Forwarder", "text"),
+    ("adr_nadr", "ADR / NADR", "text"),
     ("itos_no", "ITOS no.", "text"),
     ("bl_number", "BL / booking no.", "text"),
     ("carrier", "Carrier (as the source writes it)", "text"),
@@ -92,6 +94,7 @@ SOURCE_VALUES = (
     ("goods_code", "Goods code (TMS)", "text"),
     ("qty", "Quantity", "number"),
     ("gross_weight", "Gross weight", "number"),
+    ("net_weight", "Net weight", "number"),
     ("depot_out.name", "Depot Out - name", "text"),
     ("depot_out.address_no", "Depot Out - TMS address no.", "text"),
     ("depot_out.reference", "Depot Out - reference", "text"),
@@ -143,7 +146,7 @@ def value_group(name: str) -> str:
         return "Depot Out"
     if name.startswith("depot_in."):
         return "Depot In"
-    if name in ("container_no", "container_type", "seal_no", "goods", "goods_code", "qty", "gross_weight"):
+    if name in ("container_no", "container_type", "seal_no", "goods", "goods_code", "qty", "gross_weight", "net_weight"):
         return "Container / goods"
     return "Shipment"
 
