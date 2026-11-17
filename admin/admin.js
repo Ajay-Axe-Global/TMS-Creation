@@ -312,36 +312,48 @@
     $("cancel-client-btn").style.display = "none";
     $("client-name").disabled = false;
     ["client-name", "client-warehouse"].forEach(id => $(id).value = "");
-    setLaneRows([{ carrier: "ALL", tradelane_no: "", customer_no: "" }]);
+    setLaneRows([{ carrier: "ALL", container_type: "", tradelane_no: "", customer_no: "" }]);
   }
 
+  // Trade lane rows: each matches on a carrier (ALL = any) and optionally a container type (empty = any type); the most
+  // specific matching row wins. The BASE row — ALL with no type, else the first ALL row — holds the client's own
+  // customer no.; every other row needs one only when it differs.
   let laneCarriers = ["ALL"];
-  function addLaneRow(carrier = "ALL", no = "", customerNo = "") {
+  const isBase = (r, all) => r === (all.find(x => x.carrier === "ALL" && !x.container_type) || all.find(x => x.carrier === "ALL"));
+  function laneHints() {
+    const rows = laneRows();
+    document.querySelectorAll("#tradelane-rows .lane-row").forEach((el, i) => {
+      el.querySelector(".lane-customer").placeholder = isBase(rows[i], rows) ? "K0014043" : "Same as ALL";
+    });
+  }
+  function addLaneRow(carrier = "ALL", no = "", customerNo = "", ctype = "") {
     const row = document.createElement("div");
     row.className = "lane-row";
     row.innerHTML = `<div><select class="lane-carrier">${laneCarriers.map(k =>
       `<option value="${esc(k)}"${k === carrier ? " selected" : ""}>${esc(k)}</option>`).join("")}</select></div>
+      <div><input class="lane-type" list="lookup-container-types" autocomplete="off" placeholder="Any — or type one"
+        title="Type any container type (e.g. 40HC), or pick one the shipments already have. Empty = every type." value="${esc(ctype || "")}" /></div>
       <div><input class="lane-customer" value="${esc(customerNo || "")}" /></div>
       <div><input class="lane-no" placeholder="TLVMT25-100245" value="${esc(no)}" /></div>
       <div><button type="button" class="danger lane-del" title="Remove this row" aria-label="Remove this row">Remove</button></div>`;
-    row.querySelector(".lane-del").addEventListener("click", () => row.remove());
-    // the ALL row holds the client's customer no.; any other carrier only needs one when it differs
-    const sel = row.querySelector(".lane-carrier"), cust = row.querySelector(".lane-customer");
-    const hint = () => { cust.placeholder = sel.value === "ALL" ? "K0014043" : "Same as ALL"; };
-    sel.addEventListener("change", hint);
-    hint();
+    row.querySelector(".lane-del").addEventListener("click", () => { row.remove(); laneHints(); });
+    row.querySelector(".lane-carrier").addEventListener("change", laneHints);
+    row.querySelector(".lane-type").addEventListener("input", laneHints);
     $("tradelane-rows").appendChild(row);
+    laneHints();
   }
   function setLaneRows(rows) {
     $("tradelane-rows").innerHTML = "";
-    rows.forEach(r => addLaneRow(r.carrier, r.tradelane_no, r.customer_no));
+    rows.forEach(r => addLaneRow(r.carrier, r.tradelane_no, r.customer_no, r.container_type));
   }
   function laneRows() {
     return [...document.querySelectorAll("#tradelane-rows .lane-row")].map(r => ({
-      carrier: r.querySelector(".lane-carrier").value, tradelane_no: r.querySelector(".lane-no").value.trim(),
+      carrier: r.querySelector(".lane-carrier").value,
+      container_type: r.querySelector(".lane-type").value.trim().toUpperCase(),
+      tradelane_no: r.querySelector(".lane-no").value.trim(),
       customer_no: r.querySelector(".lane-customer").value.trim() }));
   }
-  $("add-lane-btn").addEventListener("click", () => addLaneRow(laneRows().some(r => r.carrier === "ALL") ? laneCarriers[1] : "ALL"));
+  $("add-lane-btn").addEventListener("click", () => addLaneRow("ALL"));
   $("cancel-client-btn").addEventListener("click", resetClientForm);
 
   function startEditClient(id) {
@@ -354,9 +366,9 @@
     $("client-name").value = c.client_name;
     $("client-name").disabled = true;             // the client name names the flow code folder; the warehouse can be corrected
     $("client-warehouse").value = c.warehouse || "";
-    // the client's own customer no. is shown on its ALL row
-    const rows = c.tradelanes.map(t => t.carrier === "ALL" ? { ...t, customer_no: t.customer_no || c.tms_customer_no || "" } : t);
-    setLaneRows(rows.length ? rows : [{ carrier: "ALL", tradelane_no: "", customer_no: c.tms_customer_no || "" }]);
+    // the client's own customer no. is shown on its base row (ALL / any type)
+    const rows = c.tradelanes.map(t => isBase(t, c.tradelanes) ? { ...t, customer_no: t.customer_no || c.tms_customer_no || "" } : t);
+    setLaneRows(rows.length ? rows : [{ carrier: "ALL", container_type: "", tradelane_no: "", customer_no: c.tms_customer_no || "" }]);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -364,12 +376,12 @@
     const msg = $("client-msg");
     const isEdit = editingClientId !== null;
     const lanes = laneRows();
-    const all = lanes.find(r => r.carrier === "ALL");
+    const all = lanes.find(r => isBase(r, lanes));
     const body = {
       client_name: $("client-name").value.trim(),
       warehouse: $("client-warehouse").value.trim(),
-      // the ALL row's customer no. is the client's own; a carrier row keeps one only when it differs
-      tradelanes: lanes.map(r => r.carrier === "ALL" ? { ...r, customer_no: "" } : r),
+      // the base row's customer no. is the client's own; any other row keeps one only when it differs
+      tradelanes: lanes.map(r => r === all ? { ...r, customer_no: "" } : r),
     };
     if (all) body.tms_customer_no = all.customer_no;
     else if (!isEdit) body.tms_customer_no = "";
@@ -394,7 +406,7 @@
         <td>${esc(c.client_name)} <span class="mono" style="color:var(--text-muted)">flow: ${esc(c.flow_slug)}</span></td>
         <td>${c.warehouse ? esc(c.warehouse) : badge("not set", "inactive")}</td>
         <td class="mono">${esc(c.tms_customer_no || "—")}</td>
-        <td class="mono">${c.tradelanes.length ? c.tradelanes.map(t => `${esc(t.carrier)}: ${t.customer_no ? esc(t.customer_no) + " / " : ""}${esc(t.tradelane_no)}`).join("<br>") : "—"}</td>
+        <td class="mono">${c.tradelanes.length ? c.tradelanes.map(t => `${esc(t.carrier)}${t.container_type ? " · " + esc(t.container_type) : ""}: ${t.customer_no ? esc(t.customer_no) + " / " : ""}${esc(t.tradelane_no)}`).join("<br>") : "—"}</td>
         <td>${c.flow_source === "mapping" ? badge(`template v${c.mapping_version}`, "status-success")
         : c.flow_source === "file" ? badge("client file")
         : badge("not mapped", "inactive")}</td>
@@ -455,6 +467,7 @@
       $("lookup-clients").innerHTML = opts(l.clients);
       $("lookup-warehouses").innerHTML = opts(l.warehouses);
       laneCarriers = l.carriers;
+      $("lookup-container-types").innerHTML = opts(l.container_types || []);
       if (!document.querySelector("#tradelane-rows .lane-row")) resetClientForm();
     }).catch(() => {});
     await loadCatalog();

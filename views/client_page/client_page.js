@@ -86,8 +86,8 @@
     // A search looks at every month; without one only the chosen month shows.
     // A shipment stays whole if any of its rows match, so the ITOS group keeps its context.
     return sortByAta(shipments.filter(s => (q || inMonth(s)) && (!q || [
-      s.itos_no, s.client_ref, s.tms_customer_ref, s.carrier, s.vessel_name, s.remarks, s.customer_no, s.tradelane_no, s.bl_number, s.tms_file_no, s.depot_in, s.depot_out, ...s.files.map(f => f.name),
-      ...s.containers.flatMap(c => [c.container_no, c.tms_customer_ref, c.container_type, c.seal_no, c.tms_order_no, c.goods, c.depot_out]),
+      s.itos_no, s.client_ref, s.tms_customer_ref, s.forwarder, s.carrier, s.vessel_name, s.remarks, s.customer_no, s.tradelane_no, s.bl_number, s.tms_file_no, s.depot_in, s.depot_out, ...s.files.map(f => f.name),
+      ...s.containers.flatMap(c => [c.container_no, c.tms_customer_ref, c.forwarder, c.container_type, c.seal_no, c.tms_order_no, c.goods, c.depot_out]),
     ].some(v => v && String(v).toLowerCase().includes(q)))));
   }
 
@@ -214,6 +214,7 @@
           ${cell("ITOS", s.itos_no, "mono ship")}
           ${cell("Client Ref", per(c, s, "client_ref"), cls(c, "client_ref", ""))}
           ${cell("TMS Customer Ref", per(c, s, "tms_customer_ref"), cls(c, "tms_customer_ref", "nowrap"))}
+          ${cell("Forwarder", per(c, s, "forwarder"), cls(c, "forwarder", "nowrap"))}
           ${cell("ATA", fmtDate(per(c, s, "ata_date")), cls(c, "depot_out_from", "mono nowrap"))}
           ${cell("Carrier", per(c, s, "carrier"), cls(c, "carrier", ""))}
           ${first ? countCell(s, multi, open) : blank("Count")}

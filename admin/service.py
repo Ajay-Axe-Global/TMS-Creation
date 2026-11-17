@@ -7,8 +7,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import object_session
 
 from database.models import (
-    AuditLog, Carrier, Client, ClientTradeLane, DepotAddress, Goods, SourceLookup, TmsCredential, User,
-    UserClientAccess,
+    AuditLog, Carrier, Client, ClientTradeLane, DepotAddress, Goods, ShipmentContainer, SourceLookup, TmsCredential,
+    User, UserClientAccess,
 )
 from helpers.convert import slugify
 from helpers import addresses as address_svc
@@ -55,7 +55,14 @@ def _fmt(dt):
 
 def list_lookups(session):
     """Customer and warehouse names as the source spells them — suggestions for the Add client form."""
-    out = {"clients": [], "warehouses": [], "carriers": tradelanes.choices(session)}
+    out = {"clients": [], "warehouses": [], "carriers": tradelanes.choices(session),
+           # the container types the shipments have — suggestions for a trade lane's container type
+           # ("40 HC" and "40HC" are one type for the lanes: offered once)
+           "container_types": list({tradelanes.type_key(t): t.strip().upper() for (t,) in
+                                    session.query(ShipmentContainer.container_type)
+                                    .filter(ShipmentContainer.container_type.isnot(None))
+                                    .distinct().order_by(ShipmentContainer.container_type).all()
+                                    if tradelanes.type_key(t)}.values())}
     for r in session.query(SourceLookup).order_by(func.lower(SourceLookup.name)).all():
         out["clients" if r.kind == "client" else "warehouses"].append(r.name)
     return out
@@ -72,8 +79,8 @@ def client_dict(c: Client) -> dict:
             "client_name": c.client_name, "warehouse": c.warehouse,
             "flow_slug": slugify(c.client_name),        # the clients/<flow_slug>/ code folder
             "tms_customer_no": c.tms_customer_no,
-            "tradelanes": [{"carrier": t.carrier, "customer_no": t.customer_no, "tradelane_no": t.tradelane_no}
-                           for t in c.tradelanes],
+            "tradelanes": [{"carrier": t.carrier, "container_type": t.container_type, "customer_no": t.customer_no,
+                            "tradelane_no": t.tradelane_no} for t in c.tradelanes],
             "is_active": c.is_active, "user_count": len(c.grants),
             "flow_source": flow["source"] if flow else None,        # "mapping" | "file" | None (no field mapping yet)
             "mapping_version": flow.get("version") if flow else None,
@@ -94,35 +101,51 @@ def _check_client_free(session, client_name: str, warehouse: str, slug: str, exc
         raise ServiceError(f'"{display_name(client_name, warehouse)}" already exists', 409)
 
 
+def _lane_key(carrier, container_type):
+    return carrier, tradelanes.type_key(container_type)
+
+
+def lane_label(carrier, container_type) -> str:
+    return f"{carrier} / {container_type}" if container_type else f"{carrier} / any type"
+
+
 def _set_tradelanes(session, c: Client, rows) -> None:
-    """Replace the client's trade lanes with [{"carrier", "tradelane_no", "customer_no"}]: the carrier is ALL or a TMS
-    carrier shortcut, each at most once; the customer no. is optional (empty = the client's own); empty rows are ignored."""
+    """Replace the client's trade lanes with [{"carrier", "container_type", "tradelane_no", "customer_no"}]: the carrier
+    is ALL or a TMS carrier shortcut, the container type optional (empty = any type); each (carrier, type) at most once.
+    The customer no. is optional (empty = a less specific row's, else the client's own); empty rows are ignored."""
     clean = {}
+    allowed = tradelanes.choices(session)
     for r in rows:
         no = _clean(r.get("tradelane_no"))
         carrier = _clean(r.get("carrier")).upper()
+        ctype = " ".join(_clean(r.get("container_type")).upper().split()) or None
         customer_no = _clean(r.get("customer_no")) or None
-        if not no and not carrier and not customer_no:
+        if not no and not customer_no and not ctype and carrier in ("", tradelanes.ALL):
             continue
-        allowed = tradelanes.choices(session)
         if carrier not in allowed:
             raise ServiceError(f'Trade lane carrier must be one of: {", ".join(allowed)} (add new ones in Admin > Carriers)')
+        if ctype and len(ctype) > 40:
+            raise ServiceError(f"Container type {ctype!r} is too long")
         if not no:
-            raise ServiceError(f"Enter the trade lane no. for {carrier}")
-        if carrier in clean:
-            raise ServiceError(f"{carrier} has more than one trade lane")
-        clean[carrier] = (no, customer_no)
+            raise ServiceError(f"Enter the trade lane no. for {lane_label(carrier, ctype)}")
+        key = _lane_key(carrier, ctype)
+        if key in clean:
+            raise ServiceError(f"{lane_label(carrier, ctype)} is on more than one row — keep one")
+        clean[key] = (carrier, ctype, no, customer_no)
     # change the rows in place: new rows are inserted before removed ones are deleted, which would trip the
-    # one-lane-per-carrier key when a carrier's lane is only being renumbered
-    have = {t.carrier: t for t in c.tradelanes}
-    for carrier, t in have.items():
-        if carrier not in clean:
+    # one-row-per-(carrier, type) key when a lane is only being renumbered
+    have = {_lane_key(t.carrier, t.container_type): t for t in c.tradelanes}
+    for key, t in have.items():
+        if key not in clean:
             c.tradelanes.remove(t)
-    for carrier, (no, customer_no) in clean.items():
-        if carrier in have:
-            have[carrier].tradelane_no, have[carrier].customer_no = no, customer_no
+    session.flush()
+    for key, (carrier, ctype, no, customer_no) in clean.items():
+        if key in have:
+            t = have[key]
+            t.container_type, t.tradelane_no, t.customer_no = ctype, no, customer_no
         else:
-            c.tradelanes.append(ClientTradeLane(carrier=carrier, tradelane_no=no, customer_no=customer_no))
+            c.tradelanes.append(ClientTradeLane(carrier=carrier, container_type=ctype, tradelane_no=no,
+                                                customer_no=customer_no))
 
 
 def create_client(session, actor_id, data):
@@ -163,9 +186,10 @@ def update_client(session, actor_id, client_id, data):
             changes.append(f"tms_customer_no: {c.tms_customer_no!r} -> {new!r}")
             c.tms_customer_no = new
     if "tradelanes" in data:
-        before = {t.carrier: (t.customer_no, t.tradelane_no) for t in c.tradelanes}
+        lanes = lambda: {lane_label(t.carrier, t.container_type): (t.customer_no, t.tradelane_no) for t in c.tradelanes}  # noqa: E731
+        before = lanes()
         _set_tradelanes(session, c, data["tradelanes"] or [])
-        after = {t.carrier: (t.customer_no, t.tradelane_no) for t in c.tradelanes}
+        after = lanes()
         if before != after:
             changes.append(f"trade lanes: {before} -> {after}")
     if "is_active" in data and bool(data["is_active"]) != c.is_active:

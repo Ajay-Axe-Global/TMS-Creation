@@ -72,7 +72,7 @@ TASK_REGISTRY = [emvia_bp, sabic_bp, acme_bp]
 
 | Tab | Do |
 |---|---|
-| Clients | Client name, warehouse, TMS customer no., trade lane per carrier (`ALL` = fallback). A carrier row may also carry its own customer no. when that differs by carrier; otherwise the client's is used |
+| Clients | Client name, warehouse, TMS customer no., trade lane rows. A row matches on carrier (`ALL` = any) and optionally container type (empty = any); the most specific match wins: carrier + type, then carrier, then type, then `ALL`. A row may carry its own customer no.; otherwise a less specific row's, else the client's, is used (`helpers/tradelanes.py`) |
 | Users | Create users, grant the client, set each user's own TMS username and password |
 | Carriers & Addresses | Map every carrier and depot the client uses. Unmapped depots block sending |
 
