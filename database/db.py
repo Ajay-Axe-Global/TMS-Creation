@@ -76,9 +76,26 @@ def _add_new_columns() -> list[str]:
     return added
 
 
+# Key / index changes on tables that already exist (create_all only builds them with a NEW table). Each statement
+# must be safe to run on every start.
+_UPGRADES = (
+    # trade lanes: one row per carrier -> one row per (carrier, container type)
+    "ALTER TABLE client_trade_lanes DROP CONSTRAINT IF EXISTS uq_client_lane_carrier",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_client_lane_rule "
+    "ON client_trade_lanes (client_id, carrier, coalesce(container_type, ''))",
+)
+
+
+def _upgrade() -> None:
+    with engine.begin() as conn:
+        for sql in _UPGRADES:
+            conn.execute(text(sql))
+
+
 def init_db() -> None:
     """Create every table (all columns, keys and constraints) that does not exist yet, add new nullable columns to
-    existing tables, then verify the rest."""
+    existing tables, apply the key changes, then verify the rest."""
     Base.metadata.create_all(bind=engine)
     _add_new_columns()
+    _upgrade()
     _check_schema()

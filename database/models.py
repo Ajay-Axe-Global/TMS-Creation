@@ -16,8 +16,8 @@ Layout
 import datetime
 
 from sqlalchemy import (
-    JSON, Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text,
-    UniqueConstraint,
+    JSON, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text,
+    UniqueConstraint, func,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -52,23 +52,31 @@ class Client(Base):
 
     grants = relationship("UserClientAccess", back_populates="client")
     tradelanes = relationship("ClientTradeLane", back_populates="client", cascade="all, delete-orphan",
-                              order_by="ClientTradeLane.carrier")
+                              order_by="(ClientTradeLane.carrier, ClientTradeLane.container_type)")
 
 
 class ClientTradeLane(Base):
-    """A client's TMS trade lane no. (and, when it differs by carrier, customer no.) for one carrier (the TMS carrier shortcut: MSK, MSC, HPG ...). The carrier "ALL"
-    is the lane for every carrier the client has no lane of its own for — a client with one lane has just that row."""
+    """One rule for a client's TMS trade lane no. (and, when it differs, customer no.). A row matches on the carrier (the
+    TMS carrier shortcut: MSK, MSC, HPG ... or "ALL" = any carrier) and optionally the container type (empty = any
+    type); the most specific matching row wins (helpers/tradelanes.py). A client with one lane has just the ALL row.
+    (client, carrier, container type) is unique — enforced by the index below and by Admin."""
     __tablename__ = "client_trade_lanes"
-    __table_args__ = (UniqueConstraint("client_id", "carrier", name="uq_client_lane_carrier"),)
 
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
     carrier = Column(String(20), nullable=False)                # "ALL" | a Carrier.code
+    # A container type ("40HC", "20DV" ...) this lane is only for; empty = every type.
+    container_type = Column(String(40), nullable=True)
     tradelane_no = Column(String(60), nullable=False)           # e.g. TLVMT25-100245
-    # This carrier's own TMS customer no., for a client whose customer no. differs by carrier; empty = the client's.
+    # This row's own TMS customer no., for a client whose customer no. differs; empty = from a less specific row / the client.
     customer_no = Column(String(60), nullable=True)
 
     client = relationship("Client", back_populates="tradelanes")
+
+
+# one row per (client, carrier, container type); an empty type counts as one value ("any")
+Index("uq_client_lane_rule", ClientTradeLane.client_id, ClientTradeLane.carrier,
+      func.coalesce(ClientTradeLane.container_type, ""), unique=True)
 
 
 class ClientMapping(Base):
@@ -245,6 +253,7 @@ class Shipment(Base):
 
     client_ref = Column(String(120), nullable=True)
     tms_customer_ref = Column(String(120), nullable=True)   # source tms_customer_ref, offered to the mapping
+    forwarder = Column(String(120), nullable=True)          # source forwarder, offered to the mapping
     bl_number = Column(String(120), nullable=False)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
@@ -311,6 +320,7 @@ class ShipmentContainer(Base):
     # own here, empty = the shipment's. The TMS order of that container is corrected to it.
     client_ref = Column(String(120), nullable=True)
     tms_customer_ref = Column(String(120), nullable=True)
+    forwarder = Column(String(120), nullable=True)
     carrier = Column(String(60), nullable=True)
     vessel_name = Column(String(120), nullable=True)
     country_of_origin = Column(String(10), nullable=True)

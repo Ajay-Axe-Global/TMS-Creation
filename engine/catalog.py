@@ -73,6 +73,7 @@ REMARKS = Field("text", "Remarks")
 SOURCE_VALUES = (
     ("client_ref", "Client ref", "text"),
     ("tms_customer_ref", "TMS customer ref", "text"),
+    ("forwarder", "Forwarder", "text"),
     ("itos_no", "ITOS no.", "text"),
     ("bl_number", "BL / booking no.", "text"),
     ("carrier", "Carrier (as the source writes it)", "text"),

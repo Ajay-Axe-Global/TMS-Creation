@@ -50,7 +50,7 @@ def _depot(session, name, reference, date, problems, label):
 
 
 # General values a container may carry on its own when they differ from the shipment's (the same names as the columns)
-OWN_VALUES = ("client_ref", "tms_customer_ref", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
+OWN_VALUES = ("client_ref", "tms_customer_ref", "forwarder", "carrier", "vessel_name", "country_of_origin", "country_of_destination", "closing_date",
               "depot_out_from", "vgm_closing_date", "remarks")
 
 
@@ -71,21 +71,29 @@ def _own_depot(session, shipment, c, which, problems):
                   f"Depot {which} of container {c.container_no}")
 
 
+def shipment_type(shipment: Shipment) -> str | None:
+    """The shipment's container type for choosing its lane: the first container's (every container must share it —
+    the first order is copied, see order_builder.check_payload)."""
+    return next((c.container_type for c in shipment.containers if c.container_type), None)
+
+
 def _route(client: Client, shipment: Shipment, code_of, problems: list) -> tuple[str | None, str | None]:
-    """(customer no., trade lane) for the shipment's carrier. Both are chosen once, on the first order, and the copies
-    keep them — so containers whose own carriers need another customer no. or lane cannot go in one shipment."""
-    customer, lane = tradelanes.route_for(client, code_of(shipment.carrier))
+    """(customer no., trade lane) for the shipment's carrier and container type. Both are chosen once, on the first
+    order, and the copies keep them — so containers that would need another customer no. or lane cannot go in one
+    shipment."""
+    ctype = shipment_type(shipment)
+    customer, lane = tradelanes.route_for(client, code_of(shipment.carrier), ctype)
+    what = tradelanes.describe(shipment.carrier, ctype)
     if not lane:
-        problems.append(f"{client.name} has no trade lane for carrier {shipment.carrier or '(none)'} "
-                        "and no ALL lane — add it in Admin > Clients")
+        problems.append(f"{client.name} has no trade lane for {what} (and no lane for ALL / any type) — "
+                        "add it in Admin > Clients")
         return None, None
     if not customer:
-        problems.append(f"{client.name} has no TMS customer no. for carrier {shipment.carrier or '(none)'} — "
-                        "add it in Admin > Clients")
+        problems.append(f"{client.name} has no TMS customer no. for {what} — add it in Admin > Clients")
     for c in shipment.containers:
-        if c.carrier and tradelanes.route_for(client, code_of(c.carrier)) != (customer, lane):
-            problems.append(f"container {c.container_no} is on carrier {c.carrier}, which has another customer no. or "
-                            f"trade lane than the shipment's — they are chosen once per shipment")
+        if tradelanes.route_for(client, code_of(c.carrier or shipment.carrier), c.container_type or ctype) != (customer, lane):
+            problems.append(f"container {c.container_no} ({tradelanes.describe(c.carrier or shipment.carrier, c.container_type)}) "
+                            "needs another customer no. or trade lane than the shipment's — they are chosen once per shipment")
     return customer, lane
 
 
@@ -102,7 +110,7 @@ def build_payload(session, client: Client, shipment: Shipment):
                    "tms_tradelane_no": lane},
         "shipment": {
             "id": shipment.id, "itos_no": shipment.itos_no, "client_ref": shipment.client_ref,
-            "tms_customer_ref": shipment.tms_customer_ref,
+            "tms_customer_ref": shipment.tms_customer_ref, "forwarder": shipment.forwarder,
             "bl_number": shipment.bl_number, "carrier": shipment.carrier, "carrier_code": code_of(shipment.carrier), "vessel_name": shipment.vessel_name,
             "country_of_origin": shipment.country_of_origin,
             "country_of_destination": shipment.country_of_destination,
