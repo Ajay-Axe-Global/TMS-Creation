@@ -49,6 +49,7 @@
       <div class="toolbar-actions">
         <div class="counts" id="counts"></div>
         <button type="button" class="btn btn-ghost" id="sync-btn" title="Load the latest shipments of this client from the source">Sync</button>
+        <button type="button" class="btn btn-ghost" id="preview-btn" disabled title="See what Create would type into TMS for the selected shipments">Preview</button>
         <button type="button" class="btn btn-primary" id="create-btn" disabled>Create</button>
       </div>
     </div>
@@ -112,6 +113,20 @@
       </div>
       <div class="notice attach-error" id="attach-error" role="status"></div>
       <div class="attach-grid" id="attach-grid"></div>
+    </div>
+  </div>
+
+  <!-- Preview: what Create would type into TMS for the selected shipments (read-only) -->
+  <div class="attach-overlay modal-overlay" id="preview-overlay">
+    <div class="attach-panel preview-panel" role="dialog" aria-modal="true" aria-labelledby="preview-title">
+      <div class="attach-head">
+        <div>
+          <div class="attach-title" id="preview-title">Preview</div>
+          <div class="attach-sub">What Create will type into TMS. Nothing is sent or saved.</div>
+        </div>
+        <button type="button" class="attach-close icon-btn" id="preview-close" aria-label="Close">✕</button>
+      </div>
+      <div class="preview-body" id="preview-body"></div>
     </div>
   </div>
 
