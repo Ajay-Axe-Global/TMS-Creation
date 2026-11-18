@@ -16,6 +16,7 @@
   const saveExpanded = () => { try { localStorage.setItem(EXPANDED_KEY, JSON.stringify([...expanded])); } catch { /* private mode */ } };
   let pollTimer = null;
   let docTypes = [{ id: "ANDER", label: "ANDER" }];
+  let laneChoices = [];                // the client's customer no. / trade lane pairs (Admin > Clients), for Edit
   let attachSid = null;                // the shipment whose attach panel is open
 
   $("logout-btn").addEventListener("click", () => Auth.logout());
@@ -29,6 +30,13 @@
   const cell = (label, v, cls = "") => {
     const empty = v === null || v === undefined || v === "";
     return `<td class="${cls}" data-label="${label}">${empty ? '<span class="empty-cell">—</span>' : esc(v)}</td>`;
+  };
+  // Customer No / Trade Lane: a value a user set with Edit is marked, with who set it and what the rule would give
+  const routeCell = (label, v, own, s) => {
+    if (!own) return cell(label, v, "mono ship nowrap");
+    const rule = label === "Customer No" ? s.rule_customer_no : s.rule_tradelane_no;
+    const tip = `Set with Edit${s.route_set_by ? " by " + s.route_set_by : ""} — the rule gives ${rule || "nothing"}`;
+    return `<td class="mono nowrap route-own" data-label="${label}" title="${esc(tip)}">${esc(v)} <span class="route-mark">✎</span></td>`;
   };
   const blank = (label) => `<td class="blank" data-label="${label}"></td>`;
   const fmtDate = iso => iso ? iso.split("-").reverse().join("/") : "";          // 2026-11-02 -> 02/11/2026
@@ -211,8 +219,8 @@
             ? `<td class="checkbox-cell" data-label="Select"><input type="checkbox" class="row-checkbox" data-id="${s.id}" ${selected.has(s.id) ? "checked" : ""} ${s.selectable ? "" : "disabled"} aria-label="Select ${esc(s.itos_no)}" /></td>`
             : blank("Select")}
           <td class="num-cell" data-label="S.No">${n}</td>
-          ${cell("Customer No", s.customer_no, "mono ship nowrap")}
-          ${cell("Trade Lane", s.tradelane_no, "mono ship nowrap")}
+          ${routeCell("Customer No", s.customer_no, s.route_customer_own, s)}
+          ${routeCell("Trade Lane", s.tradelane_no, s.route_lane_own, s)}
           ${cell("ITOS", s.itos_no, "mono ship")}
           ${cell("Client Ref", per(c, s, "client_ref"), cls(c, "client_ref", ""))}
           ${cell("TMS Customer Ref", per(c, s, "tms_customer_ref"), cls(c, "tms_customer_ref", "nowrap"))}
@@ -263,6 +271,8 @@
     $("create-btn").disabled = selected.size === 0 || !me.tms_login || !flowReady;
     $("create-btn").title = flowReady ? "" : "No TMS order flow for this customer yet";
     $("create-btn").textContent = selected.size ? `Create (${selected.size})` : "Create";
+    $("edit-btn").disabled = selected.size === 0;
+    $("edit-btn").textContent = selected.size ? `Edit (${selected.size})` : "Edit";
     $("preview-btn").disabled = selected.size === 0 || !flowReady;
     $("preview-btn").textContent = selected.size ? `Preview (${selected.size})` : "Preview";
 
@@ -295,6 +305,7 @@
     createEnabled = data.create_enabled;
     flowReady = data.flow_ready !== false;
     docTypes = data.doc_types || docTypes;
+    laneChoices = data.lane_choices || [];
   }
   async function load() {
     const seq = ++reqSeq;
@@ -548,6 +559,85 @@
       ${drawer}
     </section>`;
   }
+  // ── Edit: customer no. / trade lane of the selected shipments ──
+  const OTHER = "__other";
+  function closeRoute() { $("route-overlay").classList.remove("open"); }
+  const routeTargets = () => shipments.filter(s => selected.has(s.id));
+  function openRoute() {
+    const picked = routeTargets();
+    if (!picked.length) return;
+    const editable = picked.filter(s => s.selectable);
+    const first = editable[0] || picked[0];
+    const same = k => editable.every(s => s[k] === first[k]);
+    const curC = same("customer_no") ? first.customer_no || "" : "";
+    const curL = same("tradelane_no") ? first.tradelane_no || "" : "";
+    const known = laneChoices.findIndex(p => p.customer_no === curC && p.tradelane_no === curL);
+    $("route-sub").textContent = `${picked.length} shipment${picked.length === 1 ? "" : "s"} selected` +
+      (editable.length < picked.length ? ` — ${picked.length - editable.length} already queued or created, left as they are` : "") +
+      ". Saved on the shipment: Preview and Create use it instead of the Admin rule.";
+    notice($("route-error"), "", "");
+    $("route-body").innerHTML = `
+      <div class="route-list">
+        ${laneChoices.map((p, i) => `<label class="route-opt">
+          <input type="radio" name="route-pick" value="${i}" ${i === known ? "checked" : ""} />
+          <span class="mono">${esc(p.customer_no || "—")}</span><span class="mono">${esc(p.tradelane_no)}</span>
+          <small>${esc(p.rule)}</small></label>`).join("") ||
+          '<div class="pv-none">No customer no. / trade lane is set up for this client in Admin yet — type one below.</div>'}
+        <label class="route-opt route-other">
+          <input type="radio" name="route-pick" value="${OTHER}" ${known < 0 ? "checked" : ""} />
+          <span>Type another</span><small>a pair that is not in the list</small></label>
+      </div>
+      <div class="route-typed" id="route-typed">
+        <label>Customer no.<input type="text" id="route-customer" maxlength="60" class="mono" placeholder="K0014043" value="${esc(known < 0 ? curC : "")}" /></label>
+        <label>Trade lane<input type="text" id="route-lane" maxlength="60" class="mono" placeholder="TLVMT25-100245" value="${esc(known < 0 ? curL : "")}" /></label>
+      </div>`;
+    const sync = () => {
+      const other = ($("route-body").querySelector('input[name="route-pick"]:checked') || {}).value === OTHER;
+      $("route-typed").classList.toggle("off", !other);
+      $("route-customer").disabled = $("route-lane").disabled = !other;
+    };
+    $("route-body").querySelectorAll('input[name="route-pick"]').forEach(r => r.addEventListener("change", () => {
+      sync();
+      if (r.value === OTHER) $("route-customer").focus();
+    }));
+    sync();
+    $("route-reset").disabled = !editable.some(s => s.route_edited);
+    $("route-save").disabled = !editable.length;
+    $("route-overlay").classList.add("open");
+  }
+  async function saveRoute(reset) {
+    const ids = routeTargets().filter(s => s.selectable).map(s => s.id);
+    let body = { shipment_ids: ids, reset: true };
+    if (!reset) {
+      const pick = ($("route-body").querySelector('input[name="route-pick"]:checked') || {}).value;
+      if (pick === undefined) { notice($("route-error"), "err", "Pick a pair, or type another."); return; }
+      const p = pick === OTHER
+        ? { customer_no: $("route-customer").value.trim(), tradelane_no: $("route-lane").value.trim() }
+        : laneChoices[+pick];
+      if (!p.tradelane_no) { notice($("route-error"), "err", "The trade lane is needed."); return; }
+      body = { shipment_ids: ids, customer_no: p.customer_no, tradelane_no: p.tradelane_no };
+    }
+    $("route-save").disabled = $("route-reset").disabled = true;
+    try {
+      const r = await api(`${base}/route`, { method: "POST", body });
+      closeRoute();
+      notice($("notice"), "ok", reset ? `${r.changed} shipment(s) back to the Admin rule.`
+        : `Customer no. / trade lane saved on ${r.changed} shipment(s). Check with Preview, then Create.`);
+      await refresh();
+    } catch (e) {
+      notice($("route-error"), "err", esc(e.message));
+      $("route-save").disabled = false;
+      $("route-reset").disabled = false;
+    }
+  }
+  $("edit-btn").addEventListener("click", openRoute);
+  $("route-close").addEventListener("click", closeRoute);
+  $("route-cancel").addEventListener("click", closeRoute);
+  $("route-save").addEventListener("click", () => saveRoute(false));
+  $("route-reset").addEventListener("click", () => saveRoute(true));
+  $("route-overlay").addEventListener("click", e => { if (e.target.id === "route-overlay") closeRoute(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeRoute(); });
+
   function closePreview() { $("preview-overlay").classList.remove("open"); }
   $("preview-btn").addEventListener("click", async () => {
     const ids = shipments.filter(s => selected.has(s.id)).map(s => s.id);

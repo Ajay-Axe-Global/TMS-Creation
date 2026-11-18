@@ -82,7 +82,16 @@ def _route(client: Client, shipment: Shipment, code_of, problems: list) -> tuple
     order, and the copies keep them — so containers that would need another customer no. or lane cannot go in one
     shipment."""
     ctype = shipment_type(shipment)
+    own_customer, own_lane = shipment.route_customer_no, shipment.route_tradelane_no   # set by a user on the page
     customer, lane = tradelanes.route_for(client, code_of(shipment.carrier), ctype)
+    if own_lane:
+        # the user chose the lane for this shipment: the rule does not decide, and the containers need not agree
+        customer = own_customer or customer or client.tms_customer_no or None
+        if not customer:
+            problems.append(f"no TMS customer no. for the trade lane {own_lane} — set it with Edit on the page")
+        return customer, own_lane
+    if own_customer:
+        customer = own_customer
     what = tradelanes.describe(shipment.carrier, ctype)
     if not lane:
         problems.append(f"{client.name} has no trade lane for {what} (and no lane for ALL / any type) — "
@@ -91,7 +100,9 @@ def _route(client: Client, shipment: Shipment, code_of, problems: list) -> tuple
     if not customer:
         problems.append(f"{client.name} has no TMS customer no. for {what} — add it in Admin > Clients")
     for c in shipment.containers:
-        if tradelanes.route_for(client, code_of(c.carrier or shipment.carrier), c.container_type or ctype) != (customer, lane):
+        if (tradelanes.route_for(client, code_of(c.carrier or shipment.carrier), c.container_type or ctype)[1] != lane
+                or (not own_customer and tradelanes.route_for(client, code_of(c.carrier or shipment.carrier),
+                                                              c.container_type or ctype)[0] != customer)):
             problems.append(f"container {c.container_no} ({tradelanes.describe(c.carrier or shipment.carrier, c.container_type)}) "
                             "needs another customer no. or trade lane than the shipment's — they are chosen once per shipment")
     return customer, lane
@@ -184,8 +195,8 @@ def enqueue(session, user_id: int, client: Client, shipment_ids) -> dict:
         raise JobError("No TMS login is set for your account — ask an administrator to add it.")
     if cred.status == "invalid":
         raise JobError("TMS rejected your stored password — ask an administrator to update it.")
-    if not tradelanes.has_customer_no(client) or not client.tradelanes:
-        raise JobError(f"{client.name} has no TMS customer no. / trade lane yet — ask an administrator.")
+    # A client without lane rules can still create shipments whose customer no. / trade lane a user set with Edit;
+    # the rest are skipped with the reason (build_payload's problems).
 
     batch_id = str(uuid.uuid4())
     queued, skipped = [], []

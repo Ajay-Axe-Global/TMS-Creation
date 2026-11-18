@@ -137,6 +137,19 @@ def _keys() -> dict[str, str]:
 
 
 KEYS = _keys()                    # "general.customerRef" -> label: every field a mapping can hold
+
+
+def _key_kinds() -> dict[str, str]:
+    kinds = {f"general.{f.key}": f.kind for f in GENERAL if f.mappable}
+    for block, (_action, fields) in LINES.items():
+        for f in fields:
+            kinds[f"lines.{block}.{f.key}"] = f.kind
+    kinds.update({f"cargo.{f.key}": f.kind for f in CARGO})
+    kinds["remarks.text"] = "text"
+    return kinds
+
+
+KEY_KIND = _key_kinds()           # "general.closingDatetime" -> "date": how the flow types that field
 CHOICES = {f"general.{f.key}": f.choices for f in GENERAL if f.choices}     # key -> the only values it can have
 
 

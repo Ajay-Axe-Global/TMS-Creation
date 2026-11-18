@@ -284,3 +284,23 @@ table.tracking-table th.num { text-align: right; }
 .pv-fields .pv-note { white-space: normal; max-width: 220px; }
 .pv-none { font-size: 12px; color: var(--muted); font-style: italic; padding: 8px 10px; background: var(--surface);
   border: 1px dashed var(--border); border-radius: 8px; }
+
+
+/* ── Edit: customer no. / trade lane ─────────────────────────────────────── */
+td.route-own { color: var(--accent); font-weight: 600; }
+.route-mark { font-size: 11px; opacity: .8; }
+.route-panel { max-width: 620px; }
+.route-body { display: flex; flex-direction: column; gap: 12px; }
+.route-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.route-opt { display: grid; grid-template-columns: auto minmax(90px, auto) 1fr auto; align-items: center; gap: 12px;
+  padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.route-opt:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.route-opt small { color: var(--muted); justify-self: end; }
+.route-other { grid-template-columns: auto 1fr auto; }
+.route-typed { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.route-typed label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.route-typed input { padding: 8px 10px; }
+.route-typed.off { opacity: .45; }
+.route-actions { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.route-spacer { flex: 1; }
+@media (max-width: 600px) { .route-typed { grid-template-columns: 1fr; } .route-opt { grid-template-columns: auto 1fr; } .route-opt small { display: none; } }

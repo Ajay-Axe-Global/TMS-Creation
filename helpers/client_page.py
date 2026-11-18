@@ -7,6 +7,8 @@ calls make_blueprint("<customer>") to get it.
     POST   /app/<customer>/<client_slug>/sync                      load this client's shipments from the source DB
     POST   /app/<customer>/<client_slug>/preview                   what Create would type for the selected ones (read-only)
     POST   /app/<customer>/<client_slug>/create                    queue the selected shipments for TMS
+    POST   /app/<customer>/<client_slug>/route                     set (or reset) the customer no. / trade lane of the
+                                                                   selected shipments (Edit)
     POST   /app/<customer>/<client_slug>/shipments/<id>/files      attach a document (multipart "file" + "doc_type")
     GET    /app/<customer>/<client_slug>/shipments/<id>/files/<fid>   download it
     DELETE /app/<customer>/<client_slug>/shipments/<id>/files/<fid>   remove it
@@ -33,6 +35,22 @@ from helpers.convert import json_number as _n, iso as _d, slugify
 from helpers.decorators import client_access_required
 
 VIEWS = Path(__file__).resolve().parent.parent / "views"      # the one page every customer shares
+
+_ROUTE_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,59}$")    # a TMS customer no. / trade lane no.
+
+
+def lane_choices(client) -> list[dict]:
+    """The customer no. / trade lane pairs set up for this client in Admin > Clients — what Edit offers first."""
+    out, seen = [], set()
+    for row in client.tradelanes:
+        customer = row.customer_no or client.tms_customer_no or ""
+        pair = (customer, row.tradelane_no)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        rule = ("any carrier" if row.carrier == tradelanes.ALL else row.carrier) +                (f" · {row.container_type}" if row.container_type else "")
+        out.append({"customer_no": customer, "tradelane_no": row.tradelane_no, "rule": rule})
+    return out
 
 
 # What the page shows per container, because the source may give each container of a BL its own: a container's own
@@ -78,6 +96,19 @@ def _shown_filter(month: str, q: str):
     in_month = and_(Shipment.depot_out_from >= start, Shipment.depot_out_from < end)
     today = datetime.date.today()
     return or_(in_month, Shipment.depot_out_from.is_(None)) if (y, mo) == (today.year, today.month) else in_month
+
+
+def route_view(client, s, code_of) -> dict:
+    """The customer no. / trade lane a Create would use (a user's own wins over the rule) and the rule's, for the page."""
+    rule_customer, rule_lane = tradelanes.route_for(client, code_of(s.carrier), jobs.shipment_type(s))
+    edited = bool(s.route_customer_no or s.route_tradelane_no)
+    customer = s.route_customer_no or rule_customer
+    if s.route_tradelane_no and not customer:
+        customer = client.tms_customer_no or None
+    return {"customer_no": customer, "tradelane_no": s.route_tradelane_no or rule_lane, "route_edited": edited,
+            "route_customer_own": bool(s.route_customer_no), "route_lane_own": bool(s.route_tradelane_no),
+            "rule_customer_no": rule_customer, "rule_tradelane_no": rule_lane,
+            "route_set_by": s.route_set_by, "route_set_at": s.route_set_at.isoformat() if s.route_set_at else None}
 
 
 def make_blueprint(flow_slug: str | None = None) -> Blueprint:
@@ -176,6 +207,7 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                 # False = no clients/<customer>/ file yet: the data shows, but nothing can be created
                 "flow_ready": flows.available(session, client),
                 "doc_types": [{"id": t, "label": label} for t, label in shipment_files.DOC_TYPES],
+                "lane_choices": lane_choices(client),          # what Edit offers (plus "type another")
                 "years": years,
                 "active_jobs": len(active),          # in any month: keep refreshing while > 0
                 "my_calls": my_calls,                # this user's in-flight jobs' latest kind ("calling" ...), any month
@@ -186,8 +218,7 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                     "tms_customer_ref": s.tms_customer_ref,
                     "forwarder": s.forwarder,
                     "carrier": s.carrier,
-                    **dict(zip(("customer_no", "tradelane_no"),
-                               tradelanes.route_for(client, code_of(s.carrier), jobs.shipment_type(s)))),
+                    **route_view(client, s, code_of),
                     "remarks": s.remarks,
                     "vessel_name": s.vessel_name,
                     "ata_date": _d(s.depot_out_from),     # the source's ata_date is stored as depot_out_from
@@ -279,6 +310,49 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                     out.append({"shipment": shipment.itos_no or shipment.bl_number, "error": str(e).splitlines()[0][:300]})
             session.rollback()                           # read-only: never keep anything a builder may have touched
             return jsonify({"previews": out, "more": max(0, len(ids) - order_preview.MAX_SHIPMENTS)})
+        finally:
+            session.close()
+
+    @bp.route("/<client_slug>/route", methods=["POST"])
+    @client_access_required()
+    def set_route(client_slug):
+        """Edit: {"shipment_ids": [...], "customer_no", "tradelane_no"} saves them on those shipments (they then win over
+        the lane rules); {"shipment_ids": [...], "reset": true} goes back to the rules. Queued / created ones are left."""
+        body = request.get_json(silent=True) or {}
+        ids = body.get("shipment_ids")
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+            return jsonify({"error": "Select at least one shipment."}), 400
+        reset = body.get("reset") is True
+        customer = str(body.get("customer_no") or "").strip().upper()
+        lane = str(body.get("tradelane_no") or "").strip().upper()
+        if not reset:
+            if not customer and not lane:
+                return jsonify({"error": "Give a customer no. and/or a trade lane, or reset to the rule."}), 400
+            for label, v in (("Customer no.", customer), ("Trade lane", lane)):
+                if v and not _ROUTE_VALUE.match(v):
+                    return jsonify({"error": f"{label} '{v[:60]}' is not valid (letters, digits, - . / _ ; max 60)."}), 400
+        session = SessionLocal()
+        try:
+            client = client_or_404(session, client_slug)
+            changed, locked = [], []
+            for sid in dict.fromkeys(ids):
+                s = session.get(Shipment, sid)
+                if s is None or s.client_id != client.id:
+                    continue
+                if s.tms_status not in jobs.QUEUEABLE:
+                    locked.append(s.itos_no or s.bl_number)
+                    continue
+                s.route_customer_no = None if reset else (customer or None)
+                s.route_tradelane_no = None if reset else (lane or None)
+                s.route_set_by = None if reset else g.user.get("username")
+                s.route_set_at = None if reset else datetime.datetime.utcnow()
+                changed.append(s.itos_no or s.bl_number)
+            if changed:
+                audit(session, g.user["user_id"], "route_reset" if reset else "route_set", client.name,
+                      ("back to the rule" if reset else f"customer {customer or '(rule)'}, lane {lane or '(rule)'}")
+                      + f" — {len(changed)} shipment(s): " + ", ".join(map(str, changed[:20])))
+            session.commit()
+            return jsonify({"changed": len(changed), "locked": locked})
         finally:
             session.close()
 

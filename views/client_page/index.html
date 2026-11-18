@@ -49,6 +49,7 @@
       <div class="toolbar-actions">
         <div class="counts" id="counts"></div>
         <button type="button" class="btn btn-ghost" id="sync-btn" title="Load the latest shipments of this client from the source">Sync</button>
+        <button type="button" class="btn btn-ghost" id="edit-btn" disabled title="Set the customer no. / trade lane of the selected shipments">Edit</button>
         <button type="button" class="btn btn-ghost" id="preview-btn" disabled title="See what Create would type into TMS for the selected shipments">Preview</button>
         <button type="button" class="btn btn-primary" id="create-btn" disabled>Create</button>
       </div>
@@ -127,6 +128,27 @@
         <button type="button" class="attach-close icon-btn" id="preview-close" aria-label="Close">✕</button>
       </div>
       <div class="preview-body" id="preview-body"></div>
+    </div>
+  </div>
+
+  <!-- Edit: the customer no. / trade lane of the selected shipments (saved on them; wins over Admin's lane rules) -->
+  <div class="attach-overlay modal-overlay" id="route-overlay">
+    <div class="attach-panel route-panel" role="dialog" aria-modal="true" aria-labelledby="route-title">
+      <div class="attach-head">
+        <div>
+          <div class="attach-title" id="route-title">Customer no. / trade lane</div>
+          <div class="attach-sub" id="route-sub"></div>
+        </div>
+        <button type="button" class="attach-close icon-btn" id="route-close" aria-label="Close">✕</button>
+      </div>
+      <div class="notice" id="route-error" role="status"></div>
+      <div class="route-body" id="route-body"></div>
+      <div class="route-actions">
+        <button type="button" class="btn btn-ghost" id="route-reset" title="Forget the edited values: use the rule from Admin > Clients again">Reset to rule</button>
+        <span class="route-spacer"></span>
+        <button type="button" class="btn btn-ghost" id="route-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="route-save">Save</button>
+      </div>
     </div>
   </div>
 

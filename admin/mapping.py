@@ -7,7 +7,7 @@ from admin.service import ServiceError
 from database.models import Client, ClientMapping, Shipment
 from engine import catalog, store
 from engine.engine import MappingFlow
-from engine.recipe import DEFAULT_SETTINGS, MappingError, check_mapping
+from engine.recipe import DATE_FORMATS, DEFAULT_SETTINGS, MappingError, check_mapping
 from engine.starters import STARTERS
 from helpers import audit as audit_svc
 from helpers import flows, jobs, order_builder
@@ -34,7 +34,7 @@ def _version(m: ClientMapping | None) -> dict | None:
 def catalog_payload() -> dict:
     """Everything the mapping form's dropdowns are built from, section by section."""
     return {"sections": catalog.sections(), "values": catalog.value_options(), "defaults": catalog.DEFAULT_ROWS,
-            "settings": {"defaults": DEFAULT_SETTINGS, "same_for_all_choices": list(catalog.SAME_FOR_ALL_CHOICES)}}
+            "date_formats": list(DATE_FORMATS), "settings": {"defaults": DEFAULT_SETTINGS, "same_for_all_choices": list(catalog.SAME_FOR_ALL_CHOICES)}}
 
 
 def state(session, client_id: int) -> dict:

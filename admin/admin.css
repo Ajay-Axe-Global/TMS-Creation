@@ -406,6 +406,7 @@ tfoot .total-row td { font-weight: 700; border-bottom: none; border-top: 1px sol
 .map-line .map-part { flex: 1 1 170px; min-width: 0; }
 .map-line .map-sep { width: 48px; flex: 0 0 auto; padding: 8px 4px; text-align: center; font-family: var(--mono); }
 .map-line .map-time { width: 76px; flex: 0 0 auto; text-align: center; font-family: var(--mono); }
+.map-line .map-fmt { width: auto; flex: 0 0 auto; font-family: var(--mono); }
 .map-line .map-mode { width: auto; flex: 0 0 auto; }
 .map-field > .map-add { margin-top: 4px; }
 

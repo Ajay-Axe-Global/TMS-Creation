@@ -5,17 +5,28 @@ run when an order is built — never executed as code.
     {"parts": [{"src": "bl_number"}, {"src": "itos_no"}], "sep": "/"}        BL no./ITOS no.
     {"parts": [{"text": "Import"}]}                                          a fixed text
     {"parts": [{"src": "closing_date"}], "time": "10:00"}                    11/25/2026 10:00 (no "time" = date only)
+    {"parts": [{"src": "itos_no"}, {"src": "depot_out_from"}], "sep": "/", "date_format": "dd/MM"}   65767/12/11
 
     parts   what to take: {"src": <a name of catalog.SOURCE_VALUES>} or {"text": "..."}      (1 - 8 of them)
     mode    "join" (default): the parts that have a value, joined with `sep`;  "first": the first part that has one
     sep     the separator for "join" (default "")
     time    "HH:MM", added after every date part (a part whose source is a date is typed month/day/year, MM/dd/yyyy)
+    date_format  one of DATE_FORMATS: how the date parts are written inside a TEXT field (Customer Ref. ...); not
+            allowed on a date field, which TMS reads in its own date format
     case    "" | "upper" | "lower"
 """
+import datetime
 import re
 
 from engine import catalog
 from helpers.convert import date_time
+
+# date_format -> how a date part is written (strftime). "" = the TMS date (MM/dd/yyyy, see helpers/convert.tms_date)
+DATE_FORMATS = {
+    "dd/MM": "%d/%m", "dd/MM/yyyy": "%d/%m/%Y", "dd/MM/yy": "%d/%m/%y", "MM/dd": "%m/%d", "MM/dd/yyyy": "%m/%d/%Y",
+    "dd-MM": "%d-%m", "dd-MM-yyyy": "%d-%m-%Y", "dd.MM": "%d.%m", "dd.MM.yyyy": "%d.%m.%Y", "ddMM": "%d%m",
+    "ddMMyy": "%d%m%y", "yyyy-MM-dd": "%Y-%m-%d", "yyyyMMdd": "%Y%m%d",
+}
 
 MODES = ("join", "first")
 CASES = ("", "upper", "lower")
@@ -45,7 +56,13 @@ def render(recipe: dict | None, v) -> str:
             texts.append(part["text"])
             continue
         raw = _value(v, part["src"])
-        texts.append(date_time(raw, time) if catalog.VALUE_KIND[part["src"]] == "date" else str(raw))
+        if catalog.VALUE_KIND[part["src"]] != "date":
+            texts.append(str(raw))
+        elif recipe.get("date_format") and raw:
+            d = datetime.date.fromisoformat(str(raw)[:10]).strftime(DATE_FORMATS[recipe["date_format"]])
+            texts.append(f"{d} {time}" if time else d)
+        else:
+            texts.append(date_time(raw, time))
     filled = [t for t in texts if t != ""]
     out = (filled[0] if filled else "") if recipe.get("mode") == "first" else (recipe.get("sep") or "").join(filled)
     return {"upper": out.upper(), "lower": out.lower()}.get(recipe.get("case") or "", out)
@@ -76,13 +93,18 @@ def check_recipe(key: str, recipe) -> list[str]:
     time = recipe.get("time", "")
     if time and not (isinstance(time, str) and _TIME.match(time)):
         problems.append(f'{key}: the time must look like "10:00"')
+    fmt = recipe.get("date_format", "")
+    if fmt and fmt not in DATE_FORMATS:
+        problems.append(f"{key}: the date format must be one of {', '.join(DATE_FORMATS)}")
+    elif fmt and catalog.KEY_KIND.get(key) == "date":
+        problems.append(f"{key}: a date field is typed in TMS's own date format; a date format is only for text fields")
     if recipe.get("case", "") not in CASES:
         problems.append(f"{key}: case must be empty, upper or lower")
     if key in catalog.CHOICES and not problems:
         only = parts[0].get("text") if len(parts) == 1 else None
         if only not in catalog.CHOICES[key]:
             problems.append(f"{key}: pick one of the TMS values ({', '.join(catalog.CHOICES[key])})")
-    extra = set(recipe) - {"parts", "mode", "sep", "time", "case"}
+    extra = set(recipe) - {"parts", "mode", "sep", "time", "case", "date_format"}
     if extra:
         problems.append(f"{key}: unknown setting(s) {', '.join(sorted(extra))}")
     return problems
