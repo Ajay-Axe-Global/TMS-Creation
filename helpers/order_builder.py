@@ -186,7 +186,11 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
         depot = first.get(LINE_KEYS[action]) or s.get(LINE_KEYS[action])
         if not depot:
             continue
-        lines.append({"action": action, "addressNo": depot["address_no"], "ref1": vals.get("ref", ""),
+        lines.append({"action": action, "addressNo": depot["address_no"],
+                      # shown in the job log: the source's depot was not in Admin → Addresses, the default no. was used
+                      "addressNote": (f'default address — "{depot["name"]}" is not in Admin → Addresses'
+                                      if depot.get("address_default") else ""),
+                      "ref1": vals.get("ref", ""),
                       "bookedFrom": vals.get("bookedFrom", ""), "bookedUntil": vals.get("bookedUntil", ""),
                       "closing": ""})
     data["lines"] = lines

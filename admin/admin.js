@@ -397,11 +397,29 @@
   });
   document.addEventListener("mapping-changed", () => loadClientsTab().catch(() => {}));   // publish / unpublish: refresh the table
 
+  // the All clients table's filters (like the Users tab): all in the browser, over clientsCache
+  const CLIENT_FILTERS = ["clients-search", "clients-filter-status", "clients-filter-mapping", "clients-filter-ready"];
+  function filteredClients() {
+    const q = $("clients-search").value.trim().toLowerCase();
+    const status = $("clients-filter-status").value, mapping = $("clients-filter-mapping").value, ready = $("clients-filter-ready").value;
+    return clientsCache.filter(c =>
+      (!status || (status === "active") === !!c.is_active) &&
+      (!mapping || (mapping === "none" ? !c.flow_source : c.flow_source === mapping)) &&
+      (!ready || (ready === "ready") === !!(c.ready && c.is_active)) &&
+      (!q || [c.client_name, c.warehouse, c.name, c.flow_slug, c.tms_customer_no,
+              ...c.tradelanes.flatMap(t => [t.carrier, t.container_type, t.customer_no, t.tradelane_no])]
+        .some(v => (v || "").toLowerCase().includes(q))));
+  }
+  CLIENT_FILTERS.forEach(id => $(id).addEventListener(id === "clients-search" ? "input" : "change", renderClientsTables));
+  $("clients-clear-btn").addEventListener("click", () => { CLIENT_FILTERS.forEach(id => $(id).value = ""); renderClientsTables(); });
+
   function renderClientsTables() {
     $("client-stat-total").textContent = clientsCache.length.toLocaleString();
     $("client-stat-ready").textContent = clientsCache.filter(c => c.ready && c.is_active).length.toLocaleString();
+    const rows = filteredClients();
+    $("clients-count").textContent = rows.length === clientsCache.length ? `${rows.length}` : `${rows.length} of ${clientsCache.length}`;
     const ctb = document.querySelector("#clients-table tbody");
-    ctb.innerHTML = clientsCache.length ? clientsCache.map(c => `
+    ctb.innerHTML = rows.length ? rows.map(c => `
       <tr class="${c.is_active ? "" : "inactive"}">
         <td>${esc(c.client_name)} <span class="mono" style="color:var(--text-muted)">flow: ${esc(c.flow_slug)}</span></td>
         <td>${c.warehouse ? esc(c.warehouse) : badge("not set", "inactive")}</td>
@@ -419,7 +437,7 @@
           ${c.is_active ? `<button class="icon danger" title="Deactivate" aria-label="Deactivate" data-toggle-client="${c.id}">${ICON_OFF}</button>`
         : `<button class="icon reactivate" title="Reactivate" aria-label="Reactivate" data-toggle-client="${c.id}">${ICON_ON}</button>`}
         </div></td>
-      </tr>`).join("") : emptyRow(8, "No clients yet.");
+      </tr>`).join("") : emptyRow(8, clientsCache.length ? "No clients match these filters." : "No clients yet.");
 
     document.querySelectorAll("[data-edit-client]").forEach(b =>
       b.addEventListener("click", () => startEditClient(+b.dataset.editClient)));

@@ -8,10 +8,15 @@ letters and digits count).
 The list starts as the TMS depot addresses in helpers/tms_codes.py, written into the table once by seed_if_empty();
 after that Admin > Addresses is where it is changed.
 """
+import os
 import re
 
 from database.models import DepotAddress, Shipment, ShipmentContainer
 from helpers import tms_codes
+
+# A depot name the list has no entry for (the source sent an address we do not know) is created in TMS with this
+# address no. on its Depot Out / Depot In line instead of blocking the shipment. .env DEFAULT_DEPOT_ADDRESS_NO overrides.
+DEFAULT_ADDRESS_NO = (os.getenv("DEFAULT_DEPOT_ADDRESS_NO") or "75121").strip()
 
 
 def address_key(name: str | None) -> str:
@@ -51,8 +56,9 @@ def seed_if_empty(session) -> int:
 
 
 def unmapped(session) -> list[dict]:
-    """Depot names used by any shipment or container (in or out) that have no entry yet — exactly what is blocking
-    shipments from being sent. One entry per distinct key, in the first spelling seen: [{name}]."""
+    """Depot names used by any shipment or container (in or out) that have no entry yet — those shipments go to TMS
+    with the default address no. (DEFAULT_ADDRESS_NO) until one is added. One entry per distinct key, in the first
+    spelling seen: [{name}]."""
     mapped = {k for (k,) in session.query(DepotAddress.name_key)}
     seen: dict[str, str] = {}
     for col in (Shipment.depot_in_address, Shipment.depot_out_address,
