@@ -295,7 +295,22 @@
           </div>
 
           <div class="panel full">
-            <div class="panel-head"><h2>All clients</h2></div>
+            <div class="panel-head"><h2>All clients <span class="count-chip" id="clients-count"></span></h2></div>
+            <div class="toolbar">
+              <input type="search" id="clients-search" class="search-input" placeholder="Search client, warehouse, customer or trade lane no." />
+              <select id="clients-filter-status">
+                <option value="">Any status</option><option value="active">Active</option><option value="inactive">Inactive</option>
+              </select>
+              <select id="clients-filter-mapping">
+                <option value="">Any field mapping</option><option value="mapping">Template</option>
+                <option value="file">Client file</option><option value="none">Not mapped</option>
+              </select>
+              <select id="clients-filter-ready">
+                <option value="">Any readiness</option><option value="ready">Ready for TMS</option>
+                <option value="not_ready">Needs setup</option>
+              </select>
+              <button type="button" class="link-btn" id="clients-clear-btn">Clear filters</button>
+            </div>
             <div class="table-scroll">
               <table id="clients-table">
                 <thead>

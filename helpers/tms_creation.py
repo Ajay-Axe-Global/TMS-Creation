@@ -935,8 +935,9 @@ class Creation:
         # 1-2. the left columns: Address No. and Ref (the UNLOAD row has no address of its own: TMS fills it)
         for ln, key in depots:
             val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
+            note = ln.get("addressNote") or ""            # the default address no. was used (unknown source depot)
             self.step("Lines", ln["action"], cap, key, "Address No.", ln.get("addressNo"), lookup=True, settle=0.6,
-                      extra=lambda v=val: f"{v('Address Name')} / {v('Address City')}",
+                      extra=lambda v=val, n=note: f"{v('Address Name')} / {v('Address City')}" + (f" — {n}" if n else ""),
                       check=lambda v=val: norm(v("Address Name")))
             self.step("Lines", ln["action"], cap, key, "Order Line Ref 1", ln.get("ref1"))
 

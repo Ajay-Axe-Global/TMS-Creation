@@ -10,7 +10,7 @@ Rules the queue enforces:
   * users take turns: the user who has waited longest since their last job goes first
   * a shipment that is queued/running/created cannot be queued again
   * a shipment only queues if everything TMS needs is known: the client's customer no.
-    and trade lane, at least one container, and a TMS address no. for each depot
+    and trade lane, and at least one container (a depot not in Admin → Addresses gets the default address no. 75121)
 The attached document (the file dropped on the row) is optional; its path goes in the payload.
 The job keeps a snapshot (payload), so later edits to the shipment, the client or the
 address list never change a job that is queued or being retried.
@@ -37,16 +37,16 @@ class JobError(Exception):
 
 
 def _depot(session, name, reference, date, problems, label):
-    """One depot line of the payload; records a problem if its TMS address no. is unknown."""
+    """One depot line of the payload. A depot name that is not in Admin → Addresses (the source sent an address we do
+    not know) does not block the shipment: its line gets the default address no. (addresses.DEFAULT_ADDRESS_NO, 75121)
+    and is marked so the job log says so."""
     name = (name or "").strip()
     if not name:
         return None
     address_no = address_svc.address_no(session, name)
-    if address_no is None:
-        problems.append(f'{label} depot "{name}" has no TMS address no. — '
-                        "ask an administrator to add it in Admin → Addresses")
-    return {"name": name, "address_no": address_no,
-            "reference": reference, "date": _iso(date)}
+    default = address_no is None
+    return {"name": name, "address_no": address_svc.DEFAULT_ADDRESS_NO if default else address_no,
+            "address_default": default, "reference": reference, "date": _iso(date)}
 
 
 # General values a container may carry on its own when they differ from the shipment's (the same names as the columns)
