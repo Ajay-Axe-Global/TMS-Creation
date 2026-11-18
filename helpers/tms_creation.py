@@ -405,6 +405,18 @@ class Creation:
             return ""
 
     def show_more(self):
+        """Opens the hidden General fields (VGM Closing ... sit behind "Show more" on some cards)."""
+        try:
+            clicked = self.f.evaluate("""() => {
+              const b = [...document.querySelectorAll('button[title="Show more fields"]')].find(e => e.offsetParent !== null)
+                     || document.querySelector('button[title="Show more fields"]');
+              if (!b) return false; b.click(); return true; }""")
+        except Exception:
+            clicked = False
+        if clicked:
+            self.L("General", Field="Show more", Status="OK — clicked to show the hidden fields")
+            self.wait(1.0)
+            return
         for el in self.f.locator("a, button, span").all()[:200]:
             try:
                 if norm(el.inner_text(timeout=200)) == "show more" and el.is_visible():
@@ -425,10 +437,16 @@ class Creation:
         if not value:
             return
         cap = caption or label
-        el = self.until(lambda: self.input_of(cn, cap), 4.0)
-        if not el:
+        def visible_input():
+            e = self.input_of(cn, cap)
+            try:
+                return e if e is not None and e.is_visible() else None
+            except Exception:
+                return None
+        el = self.until(visible_input, 4.0)
+        if not el:                                       # hidden behind "Show more" (VGM Closing on some cards)
             self.show_more()
-            el = self.until(lambda: self.input_of(cn, cap), 3.0)
+            el = self.until(visible_input, 4.0)
         if not el:
             self.L("General", Field=label, Value=value, Status="NOT FOUND / READ-ONLY")
             return
@@ -965,6 +983,14 @@ class Creation:
         other = self.data.get("otherLines") or {}
         if other:
             self.fill_other_lines(other.get("bookedFrom"), other.get("bookedUntil"))
+        if self.containers:                                  # 6. UNLOAD WH carries the order's container no.
+            first = self.containers[0]
+            try:
+                self.unload_wh_container(first.get("containerNoText") or first["containerNo"])
+            except FlowFailed:
+                raise
+            except Exception as e:
+                self.L("Lines", Line="UNLOAD WH", Field="Container No.", Status="ERROR: " + str(e).splitlines()[0])
         self.verify_lines(todo)
         self.close_date_picker()
         self.blur_active()
@@ -1039,6 +1065,32 @@ class Creation:
             if action and norm(action) not in ("depot out", "depot in"):
                 found.append((r.get_attribute("rowkey", timeout=READ_MS), action))
         return found
+
+    def unload_wh_container(self, container_no):
+        """The UNLOAD WH row (the warehouse line between Drop Off and Pick Up) takes the order's own container no. in
+        its Container No. column. Done only when the trade lane has that row; a copy is corrected to its container."""
+        cap = "Lines"
+        if not container_no or not self.ensure_pane("Lines", lambda: self.grid(cap)):
+            return
+        def find():
+            i = self.col_idx(cap, "Action Code")
+            return next((r for r in self.rows(cap) if norm(self.cell_text(r.locator("td").nth(i))) == "unload wh"), None)
+        row = self.until(find, 2.0)
+        if not row:
+            return                                           # this trade lane has no UNLOAD WH row
+        key = row.get_attribute("rowkey", timeout=READ_MS)
+        if self.col_idx(cap, "Container No.") < 0:
+            self.L("Lines", Line="UNLOAD WH", Field="Container No.", Value=container_no, Status="COLUMN NOT FOUND")
+            return
+        shown = self.cell_text(self.cell(cap, key, "Container No."))
+        if norm(shown) == norm(container_no):
+            self.L("Lines", Line="UNLOAD WH", Field="Container No.", Value=container_no, Actual=shown,
+                   Extra="already there", Status="OK")
+            return
+        if shown:                                            # a copy still shows the first order's container
+            self.replace_cell("Lines", "UNLOAD WH", cap, key, "Container No.", container_no)
+        else:
+            self.step("Lines", "UNLOAD WH", cap, key, "Container No.", container_no, settle=0.6)
 
     def fill_other_lines(self, booked_from, booked_until):
         """Booked DateTime From / Until on every generated row between Depot Out and Depot In."""
@@ -1979,6 +2031,13 @@ class Creation:
             self.L("Edit", Field="Differs from the first order", Value=", ".join(sorted(changes)), Status="OK")
             self.apply_general(changes)
             self.apply_changes(changes)
+        if len(self.containers) > 1:                     # each order's UNLOAD WH row carries its own container
+            try:
+                self.unload_wh_container(container.get("containerNoText") or container["containerNo"])
+            except FlowFailed:
+                raise
+            except Exception as e:
+                self.L("Lines", Line="UNLOAD WH", Field="Container No.", Status="ERROR: " + str(e).splitlines()[0])
             if self.job.get("recalcChanged", True):      # revenues depend on the address and the cargo
                 try:
                     self.calculate_revenues()
