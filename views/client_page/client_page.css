@@ -226,3 +226,61 @@ table.tracking-table th.num { text-align: right; }
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--warning); border-radius: 10px;
   box-shadow: var(--shadow-pop); font-size: 12.5px; line-height: 1.45; color: var(--text); animation: ui-fade 120ms ease; }
 .status-pop[hidden] { display: none; }
+
+/* a month / search change while the server is asked: the old rows dim until the new ones arrive */
+#table-wrap.loading { opacity: .45; pointer-events: none; transition: opacity .15s; }
+
+/* ── Preview (a modal): what Create would type, per selected shipment ──────────── */
+.preview-panel { max-width: 1100px; }
+.preview-body { overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding-right: 2px; }
+.pv-loading { color: var(--muted); padding: 30px 0; text-align: center; }
+.pv-ship { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--surface-2); }
+.pv-ship h3 { margin: 0 0 10px; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.pv-count { font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 8px; }
+.pv-ship .notice { margin-bottom: 10px; }
+.pv-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.pv-block { margin-bottom: 12px; }
+.pv-block h4 { margin: 0 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.pv-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  overflow: hidden; font-size: 12.5px; }
+.pv-table th, .pv-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.pv-table tr:last-child th, .pv-table tr:last-child td { border-bottom: none; }
+.pv-table th { width: 42%; font-weight: 500; color: var(--muted); }
+.pv-table td { font-family: "JetBrains Mono", monospace; font-size: 12px; word-break: break-word; }
+.pv-empty { color: var(--muted); font-style: italic; font-family: inherit; opacity: .7; }
+.pv-per { color: var(--accent); font-family: Inter, sans-serif; font-style: italic; }
+.pv-note { margin-top: 4px; font-family: Inter, sans-serif; font-size: 11.5px; color: var(--warning, #b7791f); }
+
+/* the per-container drawer: closed by default, opens below Goods */
+.pv-drawer { margin-top: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.pv-drawer > summary { cursor: pointer; padding: 9px 12px; font-size: 12.5px; font-weight: 600; list-style: none;
+  display: flex; align-items: center; gap: 8px; }
+.pv-drawer > summary::-webkit-details-marker { display: none; }
+.pv-drawer > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+.pv-drawer[open] > summary::before { transform: rotate(90deg); }
+.pv-drawer[open] > summary { border-bottom: 1px solid var(--border); }
+.pv-scroll { overflow-x: auto; }
+.pv-grid-table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+.pv-grid-table th, .pv-grid-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.pv-grid-table th { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted);
+  background: var(--surface-2); }
+.pv-grid-table td { font-family: "JetBrains Mono", monospace; }
+.pv-grid-table td.num { font-family: Inter, sans-serif; color: var(--muted); }
+.pv-first { margin-left: 6px; font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+.pv-differs, .pv-differs-chip { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.pv-differs-chip { padding: 0 6px; border-radius: 4px; }
+.pv-legend { padding: 8px 12px; font-size: 11.5px; color: var(--muted); }
+@media (max-width: 760px) { .pv-cols { grid-template-columns: 1fr; } }
+
+/* Lines / Goods as field grids; the right column (the grids) gets the room */
+.preview-panel { max-width: 1280px; }
+.pv-cols { grid-template-columns: minmax(300px, 2fr) 3fr; }
+.pv-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.pv-fields { width: 100%; }
+.pv-fields tr:last-child td { border-bottom: none; }
+.pv-fields td { vertical-align: top; }
+.pv-rowname { font-family: Inter, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: .5px; color: var(--muted); }
+.pv-fields .pv-note { white-space: normal; max-width: 220px; }
+.pv-none { font-size: 12px; color: var(--muted); font-style: italic; padding: 8px 10px; background: var(--surface);
+  border: 1px dashed var(--border); border-radius: 8px; }

@@ -57,38 +57,40 @@
   const today = new Date();
   let monthSel = today.getMonth() + 1;           // 0 = ALL; the page opens on the current month
   let yearSel = today.getFullYear();
-  const ataYM = s => s.ata_date ? [+s.ata_date.slice(0, 4), +s.ata_date.slice(5, 7)] : [today.getFullYear(), today.getMonth() + 1];
-  const inMonth = s => { if (!monthSel) return true; const [y, m] = ataYM(s); return m === monthSel && y === yearSel; };
   // oldest ATA first (28/10 after 26/10); no ATA last; ITOS breaks ties
   const sortByAta = list => list.slice().sort((a, b) =>
     (!a.ata_date - !b.ata_date) || (a.ata_date || "").localeCompare(b.ata_date || "") ||
     String(a.itos_no || "").localeCompare(String(b.itos_no || ""), undefined, { numeric: true }));
 
+  // The server sends only the chosen month (or the search's matches, from every month): a month or a search change
+  // asks it again. `years` = the years that have shipments, from the server.
+  let years = [];
+  const query = () => {
+    const q = $("search-input").value.trim();
+    if (q) return `?q=${encodeURIComponent(q)}`;
+    return `?month=${monthSel ? `${yearSel}-${String(monthSel).padStart(2, "0")}` : "all"}`;
+  };
   $("month-select").innerHTML = ["ALL", ...MONTHS].map((m, i) => `<option value="${i}">${m}</option>`).join("");
-  $("month-select").addEventListener("change", e => { monthSel = +e.target.value; render(); });
-  $("year-select").addEventListener("change", e => { yearSel = +e.target.value; render(); });
+  $("month-select").addEventListener("change", e => { monthSel = +e.target.value; reload(); });
+  $("year-select").addEventListener("change", e => { yearSel = +e.target.value; reload(); });
 
   function renderMonthBar() {
-    // the years that exist in the data (+ this year); rebuilt only when they change, so an open list is not closed
-    const years = [...new Set([today.getFullYear(), ...shipments.map(s => ataYM(s)[0])])].sort();
+    // the years that have shipments (+ this year); rebuilt only when they change, so an open list is not closed
+    const yearList = [...new Set([today.getFullYear(), yearSel, ...years])].sort();
     const ysel = $("year-select");
-    if (ysel.dataset.years !== years.join()) {
-      ysel.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join("");
-      ysel.dataset.years = years.join();
+    if (ysel.dataset.years !== yearList.join()) {
+      ysel.innerHTML = yearList.map(y => `<option value="${y}">${y}</option>`).join("");
+      ysel.dataset.years = yearList.join();
     }
     ysel.value = yearSel;
     ysel.disabled = !monthSel;                    // ALL shows every year
     $("month-select").value = monthSel;
   }
 
+  // The server already chose the shipments (the month, or a search over every month — a shipment stays whole if any
+  // of its rows match, so the ITOS group keeps its context); here they are only put in order.
   function filtered() {
-    const q = $("search-input").value.trim().toLowerCase();
-    // A search looks at every month; without one only the chosen month shows.
-    // A shipment stays whole if any of its rows match, so the ITOS group keeps its context.
-    return sortByAta(shipments.filter(s => (q || inMonth(s)) && (!q || [
-      s.itos_no, s.client_ref, s.tms_customer_ref, s.forwarder, s.carrier, s.vessel_name, s.remarks, s.customer_no, s.tradelane_no, s.bl_number, s.tms_file_no, s.depot_in, s.depot_out, ...s.files.map(f => f.name),
-      ...s.containers.flatMap(c => [c.container_no, c.tms_customer_ref, c.forwarder, c.container_type, c.seal_no, c.tms_order_no, c.goods, c.depot_out]),
-    ].some(v => v && String(v).toLowerCase().includes(q)))));
+    return sortByAta(shipments);
   }
 
   // One button opens the attach panel; a chip per document type shows what is already attached.
@@ -248,9 +250,9 @@
     $("counts").textContent = `${shown.length} shipment${shown.length === 1 ? "" : "s"} · ${containers} container${containers === 1 ? "" : "s"}`;
     const empty = $("empty");
     empty.style.display = shown.length ? "none" : "block";
-    empty.textContent = !shipments.length ? "No shipments for this client yet."
-      : $("search-input").value.trim() ? "No shipments match your search."
-      : "No shipments in this month — pick another month, or ALL.";
+    empty.textContent = $("search-input").value.trim() ? "No shipments match your search."
+      : monthSel ? "No shipments in this month — pick another month, or ALL."
+      : "No shipments for this client yet.";
 
     const selectable = shown.filter(s => s.selectable);
     const picked = selectable.filter(s => selected.has(s.id)).length;
@@ -261,11 +263,13 @@
     $("create-btn").disabled = selected.size === 0 || !me.tms_login || !flowReady;
     $("create-btn").title = flowReady ? "" : "No TMS order flow for this customer yet";
     $("create-btn").textContent = selected.size ? `Create (${selected.size})` : "Create";
+    $("preview-btn").disabled = selected.size === 0 || !flowReady;
+    $("preview-btn").textContent = selected.size ? `Preview (${selected.size})` : "Preview";
 
     // The phone call: the one moment the user must act, so it is never buried in a row.
-    const mine = shipments.filter(s => s.activity && s.activity.mine);
-    const calling = mine.find(s => s.activity.kind === "calling");
-    const failedCall = mine.find(s => s.activity.kind === "call_failed");
+    // (from the server, over every month: the call shows even while another month is on screen)
+    const calling = myCalls.includes("calling");
+    const failedCall = myCalls.includes("call_failed");
     notice($("call-banner"), calling ? "warn" : failedCall ? "warn" : "",
       calling ? "📞 <strong>TMS is calling your phone</strong> — answer it and press <strong>#</strong>."
       : failedCall ? "📞 The call was not answered — trying again. Please answer and press <strong>#</strong>." : "");
@@ -273,25 +277,46 @@
     if (!flowReady) notice($("notice"), "warn", "There is no TMS order flow for this customer yet, so you can view and sync its shipments but not create them. Ask an administrator.");
     else if (!me.tms_login) notice($("notice"), "err", "No TMS login is set for your account — ask an administrator to add it before creating.");
 
-    // Keep status fresh while anything is in flight.
+    // Keep status fresh while anything is in flight (in any month — the server counts them).
     clearTimeout(pollTimer);
-    if (shipments.some(s => s.tms_status === "queued" || s.tms_status === "running")) pollTimer = setTimeout(refresh, 2500);
+    if (activeJobs > 0 || shipments.some(s => s.tms_status === "queued" || s.tms_status === "running"))
+      pollTimer = setTimeout(refresh, 2500);
   }
 
+  // Ask the server for what is shown now. Only the answer to the LATEST request is used, so a slow answer for a
+  // month the user already left never overwrites the one they are looking at.
+  let activeJobs = 0, myCalls = [], reqSeq = 0;
+  function take(data) {
+    shipments = data.shipments;
+    years = data.years || [];
+    activeJobs = data.active_jobs || 0;
+    myCalls = data.my_calls || [];
+    me = data.me;
+    createEnabled = data.create_enabled;
+    flowReady = data.flow_ready !== false;
+    docTypes = data.doc_types || docTypes;
+  }
+  async function load() {
+    const seq = ++reqSeq;
+    const data = await api(`${base}/data${query()}`);
+    if (seq !== reqSeq) return null;            // a newer request was made meanwhile
+    take(data);
+    render();
+    if (attachSid) renderAttach();
+    return data;
+  }
   async function refresh() {
-    try {
-      const data = await api(`${base}/data`);
-      shipments = data.shipments;
-      me = data.me;
-      createEnabled = data.create_enabled;
-      flowReady = data.flow_ready !== false;
-      docTypes = data.doc_types || docTypes;
-      render();
-      if (attachSid) renderAttach();
-    } catch (e) {
+    try { await load(); }
+    catch (e) {
       clearTimeout(pollTimer);
       pollTimer = setTimeout(refresh, 5000);   // transient (restart, network): keep trying
     }
+  }
+  // a month / year / search change: show at once that the list is being fetched
+  function reload() {
+    renderMonthBar();
+    $("table-wrap").classList.add("loading");
+    refresh().finally(() => $("table-wrap").classList.remove("loading"));
   }
 
   // ── selection ──
@@ -306,7 +331,9 @@
     targets.forEach(s => e.target.checked ? selected.add(s.id) : selected.delete(s.id));
     render();
   });
-  $("search-input").addEventListener("input", render);
+  // a search asks the server (every month), a moment after the user stops typing
+  let searchTimer = null;
+  $("search-input").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(reload, 300); });
 
   // ── Create ──
   const confirmDialog = (title, message, okLabel) =>
@@ -471,6 +498,75 @@
   $("attach-close").addEventListener("click", closeAttach);
   $("attach-overlay").addEventListener("click", e => { if (e.target.id === "attach-overlay") closeAttach(); });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && attachSid) closeAttach(); });
+
+  // ── Preview: what Create would type, per selected shipment (server: /preview, read-only) ──
+  const pvVal = v => (v === null || v === undefined || v === "") ? '<span class="pv-empty">empty</span>' : esc(v);
+  const pvTable = (title, rows) => rows.length
+    ? `<div class="pv-block"><h4>${title}</h4><table class="pv-table">${rows.join("")}</table></div>` : "";
+  const pvRow = (label, value) => `<tr><th>${esc(label)}</th><td>${value}</td></tr>`;
+  // a TMS grid: a header row of field names, one row per line (cells are already-escaped HTML)
+  const pvGrid = (title, heads, rows, emptyText = "") => (rows.length || emptyText) ? `<div class="pv-block"><h4>${title}</h4>${
+    rows.length ? `<div class="pv-scroll pv-box"><table class="pv-grid-table pv-fields">
+      <thead><tr>${heads.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+    : `<div class="pv-none">${esc(emptyText)}</div>`}</div>` : "";
+  function previewHtml(p) {
+    if (p.error) return `<section class="pv-ship"><h3>${esc(p.shipment || "")}</h3><div class="notice err show">${esc(p.error)}</div></section>`;
+    // Lines and Goods: one column per TMS field, like the grids in TMS
+    const lines = p.lines.map(l => [`<span class="pv-rowname">${esc(l.row)}</span>`,
+      `<b>${pvVal(l.address_no)}</b>${l.note ? `<div class="pv-note">${esc(l.note)}</div>` : ""}`,
+      pvVal(l.ref), pvVal(l.booked_from), pvVal(l.booked_until)]);
+    if (p.other_rows) lines.push(['<span class="pv-rowname">ALL OTHER ROWS</span>', "", "",
+      pvVal(p.other_rows.from), pvVal(p.other_rows.until)]);
+    const netCol = p.cargo.some(c => c.net_weight);              // Net Weight only when the mapping fills it
+    const cargo = p.cargo.map(c => [pvVal(c.good_no), pvVal(c.quantity), pvVal(c.gross_weight), ...(netCol ? [pvVal(c.net_weight)] : [])]);
+    // several containers: a drawer after Goods with every container's own no. / seal and whatever differs
+    const pc = p.per_container;
+    const drawer = pc ? `<details class="pv-drawer">
+        <summary>Per container (${pc.rows.length})${pc.columns.length > 2
+          ? ` — ${pc.columns.length - 2} value${pc.columns.length === 3 ? "" : "s"} differ: ${esc(pc.columns.slice(2).join(", "))}`
+          : " — only the container no. and seal differ"}</summary>
+        <div class="pv-scroll"><table class="pv-grid-table">
+          <thead><tr><th>#</th>${pc.columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead>
+          <tbody>${pc.rows.map((r, i) => `<tr><td class="num">${i + 1}${i === 0 ? '<span class="pv-first">first</span>' : ""}</td>${
+            r.cells.map(c => `<td class="${c.differs ? "pv-differs" : ""}">${pvVal(c.value)}</td>`).join("")}</tr>`).join("")}</tbody>
+        </table></div>
+        <div class="pv-legend"><span class="pv-differs-chip">highlighted</span> = corrected on that container's order after the copy</div>
+      </details>` : "";
+    return `<section class="pv-ship">
+      <h3>${esc(p.shipment)} <span class="pv-count">${p.containers_count} container${p.containers_count === 1 ? "" : "s"}</span></h3>
+      ${p.problems && p.problems.length ? `<div class="notice warn show">Cannot be created yet: ${esc(p.problems.join("; "))}</div>` : ""}
+      <div class="pv-cols">
+        ${pvTable("General", p.general.map(g => pvRow(g.label, g.value && g.value.startsWith("per container")
+          ? `<span class="pv-per">${esc(g.value)}</span>` : pvVal(g.value))))}
+        <div>${pvGrid("Lines", ["Action", "Address No.", "Order Line Ref 1", "Booked From", "Booked Until"], lines)}
+          ${pvGrid("Goods", ["Good No.", "Quantity", "Gross Weight", ...(netCol ? ["Net Weight"] : [])], cargo,
+                   "No cargo line — the shipment has no goods code.")}
+          ${pvTable("Remarks", p.remarks ? [pvRow("Remarks", esc(p.remarks))] : [])}</div>
+      </div>
+      ${drawer}
+    </section>`;
+  }
+  function closePreview() { $("preview-overlay").classList.remove("open"); }
+  $("preview-btn").addEventListener("click", async () => {
+    const ids = shipments.filter(s => selected.has(s.id)).map(s => s.id);
+    if (!ids.length) return;
+    $("preview-body").innerHTML = '<div class="pv-loading">Building the preview…</div>';
+    $("preview-title").textContent = `Preview — ${ids.length} shipment${ids.length === 1 ? "" : "s"}`;
+    $("preview-overlay").classList.add("open");
+    try {
+      const r = await api(`${base}/preview`, { method: "POST", body: { shipment_ids: ids } });
+      $("preview-body").innerHTML = r.previews.map(previewHtml).join("") +
+        (r.more ? `<div class="pv-note">… and ${r.more} more — preview at most 20 at a time.</div>` : "");
+      // one shipment: its container drawer starts open
+      if (r.previews.length === 1) $("preview-body").querySelectorAll("details.pv-drawer").forEach(d => d.open = true);
+    } catch (e) {
+      $("preview-body").innerHTML = `<div class="notice err show">${esc(e.message)}</div>`;
+    }
+  });
+  $("preview-close").addEventListener("click", closePreview);
+  $("preview-overlay").addEventListener("click", e => { if (e.target.id === "preview-overlay") closePreview(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closePreview(); });
   // a click anywhere else, or Escape, closes an open status note
   const closeNote = () => {
     if (noteOpen === null) return;
@@ -519,15 +615,9 @@
       $("user-name").textContent = info.name;
           $("user-avatar").textContent = (info.name || "?").trim().charAt(0).toUpperCase();
       $("back-link").href = info.role === "admin" ? "/admin" : "/dashboard";
-      const data = await api(`${base}/data`);
+      const data = await load();                 // the current month only
       $("client-title").textContent = data.client.name;
       document.title = `TMS Platform — ${data.client.name}`;
-      shipments = data.shipments;
-      me = data.me;
-      createEnabled = data.create_enabled;
-      flowReady = data.flow_ready !== false;
-      docTypes = data.doc_types || docTypes;
-      render();
     } catch (e) {
       showError(e.message === "Forbidden — you do not have access to this client"
         ? "You do not have access to this client. Ask an administrator."
