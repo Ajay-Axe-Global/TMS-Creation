@@ -22,6 +22,12 @@ ALTER TABLE shipments ADD COLUMN IF NOT EXISTS tms_customer_ref VARCHAR(120);
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS forwarder        VARCHAR(120);
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS adr_nadr         VARCHAR(40);
 
+-- ── shipments: customer no. / trade lane set by a user on the client page (Edit) ────────────────────────────────
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS route_customer_no  VARCHAR(60);
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS route_tradelane_no VARCHAR(60);
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS route_set_by       VARCHAR(120);
+ALTER TABLE shipments ADD COLUMN IF NOT EXISTS route_set_at       TIMESTAMP;
+
 -- ── shipment_containers: the same, per container, plus the net weight ────────────────────────────────────────
 ALTER TABLE shipment_containers ADD COLUMN IF NOT EXISTS tms_customer_ref VARCHAR(120);
 ALTER TABLE shipment_containers ADD COLUMN IF NOT EXISTS forwarder        VARCHAR(120);
@@ -34,6 +40,8 @@ COMMIT;
 -- SELECT table_name, column_name, data_type FROM information_schema.columns
 --  WHERE (table_name, column_name) IN (('client_trade_lanes','customer_no'), ('client_trade_lanes','container_type'),
 --        ('shipments','tms_customer_ref'), ('shipments','forwarder'), ('shipments','adr_nadr'),
+--        ('shipments','route_customer_no'), ('shipments','route_tradelane_no'), ('shipments','route_set_by'),
+--        ('shipments','route_set_at'),
 --        ('shipment_containers','tms_customer_ref'), ('shipment_containers','forwarder'),
 --        ('shipment_containers','adr_nadr'), ('shipment_containers','net_weight'))
---  ORDER BY 1, 2;     -- expect 9 rows
+--  ORDER BY 1, 2;     -- expect 13 rows

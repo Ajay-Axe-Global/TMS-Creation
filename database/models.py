@@ -241,7 +241,8 @@ class Shipment(Base):
     groups rows by (client, BL no.): all containers on the same BL are ONE shipment, the
     shipment-level fields come from those rows and each row becomes a ShipmentContainer
     (database/source_sync.py). A re-sync must NEVER touch the tms_* result columns.
-    Customer no. / trade lane are NOT here — they come from the Client.
+    Customer no. / trade lane come from the Client's lane rules, unless a user set them for this shipment on the page
+    (route_* below: an override a sync never touches; empty = the rule).
     The shipment, not the container, is what a user triggers (one job per shipment)."""
     __tablename__ = "shipments"
     __table_args__ = (UniqueConstraint("client_id", "bl_number", name="uq_shipment_client_bl"),)
@@ -273,6 +274,13 @@ class Shipment(Base):
     depot_out_date = Column(Date, nullable=True)
     # "UITHALEN VOOR 04/11 – LEEG BINNEN 08/11": built by the source sync from the VGM closing date and the closing date
     remarks = Column(String(255), nullable=True)
+
+    # Customer no. / trade lane set by a user for THIS shipment (the client page's Edit) — they win over the lane rules
+    # of Admin > Clients. Never written by a source sync. Empty = use the rule.
+    route_customer_no = Column(String(60), nullable=True)
+    route_tradelane_no = Column(String(60), nullable=True)
+    route_set_by = Column(String(120), nullable=True)       # who set them (username), for the page
+    route_set_at = Column(DateTime, nullable=True)
 
     # TMS result — written by the job runner, never by a source sync
     # "not_started" | "queued" | "running" | "done" | "failed" | "needs_relogin"

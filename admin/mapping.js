@@ -60,6 +60,7 @@
   const modelOf = r => ({
     parts: ((r && r.parts) || []).map(p => "src" in p ? { t: "src", v: p.src } : { t: "text", v: p.text }),
     sep: (r && r.sep) || "", time: (r && r.time) || "", case: (r && r.case) || "", mode: (r && r.mode) || "join",
+    fmt: (r && r.date_format) || "",
   });
   function recipeOf(m) {
     const parts = m.parts.filter(p => p.v).map(p => p.t === "src" ? { src: p.v } : { text: p.v });
@@ -68,6 +69,7 @@
     if (parts.length > 1 && m.sep) r.sep = m.sep;
     if (parts.length > 1 && m.mode === "first") r.mode = "first";
     if (m.time && parts.some(p => p.src && kindOf[p.src] === "date")) r.time = m.time;
+    if (m.fmt && parts.some(p => p.src && kindOf[p.src] === "date")) r.date_format = m.fmt;
     if (m.case) r.case = m.case;
     return r;
   }
@@ -115,6 +117,12 @@
     if (!m.parts.length) m.parts.push({ t: "src", v: "" });
     const multi = m.parts.length > 1;
     const hasDate = m.parts.some(p => p.t === "src" && kindOf[p.v] === "date");
+    const textField = f.kind !== "date";           // a TMS date field keeps TMS's own date format
+    if (!textField) m.fmt = "";
+    const fmtSel = hasDate && textField ? `<select class="map-fmt" title="How the date is written in this text, e.g. dd/MM gives 12/11">
+        <option value="">Date: TMS (MM/dd/yyyy)</option>
+        ${((catalog && catalog.date_formats) || []).map(x => `<option value="${esc(x)}"${x === m.fmt ? " selected" : ""}>Date: ${esc(x)}</option>`).join("")}
+      </select>` : "";
     const el = document.createElement("div");
     // several values sit on ONE line (value · separator · value ...), so a combined field takes two columns
     el.className = "map-field" + (multi ? " wide" : "");
@@ -128,6 +136,7 @@
           ${p.t === "text" ? `<input class="map-text" data-i="${i}" value="${esc(p.v === TEXT ? "" : p.v)}" placeholder="text" />` : ""}
           ${multi ? `<button type="button" class="map-x" data-del="${i}" title="Remove this value">&times;</button>` : ""}
         </div>`).join("")}
+        ${fmtSel}
         ${hasDate ? `<input class="map-time" value="${esc(m.time)}" maxlength="5" placeholder="time" title="Time typed after the date, e.g. 10:00. Leave empty to type the date only." />` : ""}
         ${multi ? `<select class="map-mode" title="How the values combine"><option value="join"${m.mode === "join" ? " selected" : ""}>Join all filled</option>
             <option value="first"${m.mode === "first" ? " selected" : ""}>First filled only</option></select>` : ""}
@@ -150,6 +159,8 @@
     }));
     const bind = (sel, prop) => { const x = el.querySelector(sel); if (x) x.addEventListener("input", () => { m[prop] = x.value; setDirty(true); }); };
     bind(".map-time", "time"); bind(".map-mode", "mode");
+    const fs = el.querySelector(".map-fmt");
+    if (fs) fs.addEventListener("change", () => { m.fmt = fs.value; setDirty(true); });
     return el;
   }
 
