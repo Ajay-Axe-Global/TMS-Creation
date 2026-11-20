@@ -49,6 +49,10 @@ class Client(Base):
     tms_customer_no = Column(String(60), nullable=True)         # e.g. K0014043
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
+    # Set when an admin DELETES the client: its setup (mapping, trade lanes, user access) is removed and it is hidden
+    # everywhere, but its shipments and TMS history are kept. Adding the same client + warehouse again restores this row,
+    # so the old shipments come back with their "created in TMS" status (no duplicate orders).
+    deleted_at = Column(DateTime, nullable=True)
 
     grants = relationship("UserClientAccess", back_populates="client")
     tradelanes = relationship("ClientTradeLane", back_populates="client", cascade="all, delete-orphan",

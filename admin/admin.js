@@ -436,6 +436,7 @@
           <button class="icon" title="Edit" aria-label="Edit" data-edit-client="${c.id}">${ICON_EDIT}</button>
           ${c.is_active ? `<button class="icon danger" title="Deactivate" aria-label="Deactivate" data-toggle-client="${c.id}">${ICON_OFF}</button>`
         : `<button class="icon reactivate" title="Reactivate" aria-label="Reactivate" data-toggle-client="${c.id}">${ICON_ON}</button>`}
+          <button class="icon danger" title="Delete client (its mapping and setup; shipments are kept)" aria-label="Delete" data-delete-client="${c.id}">${ICON_DELETE}</button>
         </div></td>
       </tr>`).join("") : emptyRow(8, clientsCache.length ? "No clients match these filters." : "No clients yet.");
 
@@ -443,11 +444,48 @@
       b.addEventListener("click", () => startEditClient(+b.dataset.editClient)));
     document.querySelectorAll("[data-map-client]").forEach(b =>
       b.addEventListener("click", () => MappingEditor.open(+b.dataset.mapClient)));
+    document.querySelectorAll("[data-delete-client]").forEach(b =>
+      b.addEventListener("click", () => deleteClient(+b.dataset.deleteClient)));
     document.querySelectorAll("[data-toggle-client]").forEach(b => b.addEventListener("click", async () => {
       const c = clientsCache.find(x => x.id === +b.dataset.toggleClient);
       try { await api(`/api/admin/clients/${c.id}`, { method: "PUT", body: { is_active: !c.is_active } }); await loadClientsTab(); }
       catch (e) { ui.toast(e.message, "error"); }
     }));
+  }
+
+  // Delete a client's setup (mapping, trade lanes, user access) and hide it; its shipments and jobs are kept.
+  // The dialog shows what goes; the client name must be typed to confirm (the server checks it again).
+  async function deleteClient(id) {
+    let info;
+    try { info = await api(`/api/admin/clients/${id}/delete-info`); }
+    catch (e) { ui.toast(e.message, "error"); return; }
+    if (info.active_jobs) {
+      ui.toast(`${info.name} has ${info.active_jobs} job(s) queued or running — wait for them to finish first.`, "error");
+      return;
+    }
+    const n = (v, one, many) => `<b>${v}</b> ${v === 1 ? one : many}`;
+    const shown = ui.confirm({
+      title: `Delete client "${info.name}"?`, danger: true, confirmText: "Delete", html: true,
+      text: `<b>Removed:</b> the field mapping (${n(info.mapping_versions, "version", "versions")}),
+        ${n(info.tradelanes, "trade lane", "trade lanes")} and ${n(info.users, "user's access", "users' access")}.
+        The client disappears from Admin, the users' pages and the sync.<br><br>
+        <b>Kept safely:</b> ${n(info.shipments, "shipment", "shipments")}${info.created_in_tms ? ` (${info.created_in_tms} created in TMS)` : ""}
+        and ${n(info.jobs, "job", "jobs")} with their files, logs and videos. Adding <b>${esc(info.name)}</b> again later
+        brings them all back, with their TMS status.
+        <label style="display:block;margin-top:12px">Type <b>${esc(info.name)}</b> to confirm
+          <input id="del-client-name" type="text" autocomplete="off" style="display:block;width:100%;margin-top:6px" /></label>`,
+    });
+    let typed = "";
+    const input = document.getElementById("del-client-name");
+    if (input) { input.addEventListener("input", () => { typed = input.value; }); setTimeout(() => input.focus(), 50); }
+    if (!await shown) return;
+    if (typed.trim() !== info.name) { ui.toast(`Not deleted — the name typed was not "${info.name}".`, "error"); return; }
+    try {
+      await api(`/api/admin/clients/${id}`, { method: "DELETE", body: { confirm_name: typed.trim() } });
+      if (editingClientId === id) resetClientForm();
+      ui.toast(`${info.name} deleted.`, "success");
+      await loadClientsTab();
+    } catch (e) { ui.toast(e.message, "error"); }
   }
 
   // Shipment source sync (database/source_sync.py)

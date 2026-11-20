@@ -53,6 +53,18 @@ def clients_update(session, actor, client_id):
     return service.update_client(session, actor, client_id, body())
 
 
+@bp.route("/clients/<int:client_id>/delete-info", methods=["GET"])
+@api
+def clients_delete_info(session, actor, client_id):
+    return service.client_delete_info(session, client_id)
+
+
+@bp.route("/clients/<int:client_id>", methods=["DELETE"])
+@api
+def clients_delete(session, actor, client_id):
+    return service.delete_client(session, actor, client_id, body().get("confirm_name"))
+
+
 # Field mapping (engine/): the dropdown catalogue, and one client's template — draft, publish, copy from another client
 @bp.route("/mapping/catalog", methods=["GET"])
 @api

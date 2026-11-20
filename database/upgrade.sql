@@ -17,6 +17,9 @@ ALTER TABLE client_trade_lanes DROP CONSTRAINT IF EXISTS uq_client_lane_carrier;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_client_lane_rule
     ON client_trade_lanes (client_id, carrier, coalesce(container_type, ''));
 
+-- ── clients: a deleted client is hidden, its shipments are kept ─────────────────────────────────────────────────
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+
 -- ── shipments: new source columns ────────────────────────────────────────────────────────────────────────────
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS tms_customer_ref VARCHAR(120);
 ALTER TABLE shipments ADD COLUMN IF NOT EXISTS forwarder        VARCHAR(120);
@@ -39,9 +42,10 @@ COMMIT;
 -- Check (every column the app needs is there):
 -- SELECT table_name, column_name, data_type FROM information_schema.columns
 --  WHERE (table_name, column_name) IN (('client_trade_lanes','customer_no'), ('client_trade_lanes','container_type'),
+--        ('clients','deleted_at'),
 --        ('shipments','tms_customer_ref'), ('shipments','forwarder'), ('shipments','adr_nadr'),
 --        ('shipments','route_customer_no'), ('shipments','route_tradelane_no'), ('shipments','route_set_by'),
 --        ('shipments','route_set_at'),
 --        ('shipment_containers','tms_customer_ref'), ('shipment_containers','forwarder'),
 --        ('shipment_containers','adr_nadr'), ('shipment_containers','net_weight'))
---  ORDER BY 1, 2;     -- expect 13 rows
+--  ORDER BY 1, 2;     -- expect 14 rows
