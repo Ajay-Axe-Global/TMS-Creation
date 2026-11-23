@@ -44,7 +44,7 @@ def state(session, client_id: int) -> dict:
     working = draft or published
     flow_slug = slugify(c.client_name)
     others = []
-    for o in session.query(Client).filter(Client.id != c.id).order_by(Client.client_name, Client.warehouse).all():
+    for o in session.query(Client).filter(Client.id != c.id, Client.deleted_at.is_(None)).order_by(Client.client_name, Client.warehouse).all():
         m = store.published(session, o.id) or (store.versions(session, o.id) or [None])[0]
         if m is not None:
             others.append({"client_id": o.id, "name": o.name, "version": m.version, "status": m.status})

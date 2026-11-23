@@ -3,12 +3,14 @@ Business logic behind /api/admin/*. Every function takes an open SQLAlchemy
 session, raises ServiceError(message, status) for anything the caller did wrong,
 and commits its own writes. routes/admin_routes.py only translates HTTP <-> this.
 """
+import datetime
+
 from sqlalchemy import func
 from sqlalchemy.orm import object_session
 
 from database.models import (
-    AuditLog, Carrier, Client, ClientTradeLane, DepotAddress, Goods, ShipmentContainer, SourceLookup, TmsCredential,
-    User, UserClientAccess,
+    AuditLog, Carrier, Client, ClientMapping, ClientMappingRow, ClientTradeLane, DepotAddress, Goods, Shipment,
+    ShipmentContainer, SourceLookup, TmsCredential, TmsJob, User, UserClientAccess,
 )
 from helpers.convert import slugify
 from helpers import addresses as address_svc
@@ -68,6 +70,72 @@ def list_lookups(session):
     return out
 
 
+def sync_lookups(session, actor_id):
+    """Copy every client name and warehouse name the source has into source_lookups (the Add client suggestions).
+    Only adds; a name is the source's own spelling, so picking it can't be a typo."""
+    from database import source_sync
+    try:
+        pairs = source_sync.source_clients()
+    except source_sync.SourceError as e:
+        raise ServiceError(str(e), 502)
+    have = {(r.kind, r.name.strip().lower()) for r in session.query(SourceLookup)}
+    added = {"client": [], "warehouse": []}
+    for p in pairs:
+        for kind, name in (("client", p["client_name"]), ("warehouse", p["warehouse"])):
+            name = (name or "").strip()
+            if name and (kind, name.lower()) not in have:
+                session.add(SourceLookup(kind=kind, name=name[:255]))
+                have.add((kind, name.lower()))
+                added[kind].append(name)
+    if added["client"] or added["warehouse"]:
+        audit_svc.audit(session, actor_id, "lookups.sync", "source names",
+                        f"{len(added['client'])} client name(s), {len(added['warehouse'])} warehouse(s) added")
+    session.commit()
+    return {"clients_added": added["client"], "warehouses_added": added["warehouse"], "pairs": len(pairs)}
+
+
+def _check_in_source(session, client_name: str, warehouse: str):
+    """A client is only synced when its name + warehouse match a source row, so refuse a pair the source doesn't have
+    (typo, wrong alias). Source unreachable: both names must at least be known source spellings (Sync names)."""
+    from database import source_sync
+    want = (client_name.strip().lower(), warehouse.strip().lower())
+    try:
+        pairs = source_sync.source_clients()
+    except source_sync.SourceError:
+        known = {(r.kind, r.name.strip().lower()) for r in session.query(SourceLookup)}
+        if ("client", want[0]) in known and ("warehouse", want[1]) in known:
+            return
+        raise ServiceError(f'The source database can\'t be reached and "{client_name}" / "{warehouse}" is not a known '
+                           "source spelling. Pick the names from the suggestions, or try again when the source is back.")
+    if any((p["client_name"].lower(), p["warehouse"].lower()) == want for p in pairs):
+        return
+    others = sorted({p["warehouse"] for p in pairs if p["client_name"].lower() == want[0] and p["warehouse"]})
+    if others:
+        raise ServiceError(f'"{client_name}" is in the source only with warehouse: {", ".join(others)}. Pick one of these.')
+    raise ServiceError(f'"{client_name}" with warehouse "{warehouse}" is not in the source database, so the sync would '
+                       "find no shipments. Check the spelling: pick it from the suggestions or from New in source "
+                       "(click Sync names first if it is new).")
+
+
+def new_source_clients(session):
+    """The source's client + warehouse pairs that are not a client here yet (a deleted one is listed too: adding it
+    restores it). Source unreachable: an error message instead of a list, the Admin page still works."""
+    from database import source_sync
+    try:
+        pairs = source_sync.source_clients()
+    except source_sync.SourceError as e:
+        return {"error": str(e), "clients": []}
+    key = lambda n, w: ((n or "").strip().lower(), (w or "").strip().lower())        # noqa: E731
+    have = {key(c.client_name, c.warehouse): c for c in session.query(Client)}
+    out = []
+    for p in pairs:
+        c = have.get(key(p["client_name"], p["warehouse"]))
+        if c is None or c.deleted_at is not None:
+            out.append({"client_name": p["client_name"], "warehouse": p["warehouse"], "rows": p["rows"],
+                        "deleted": c is not None})
+    return {"error": None, "clients": out}
+
+
 def display_name(client_name: str, warehouse: str) -> str:
     return f"{client_name} - {warehouse}" if warehouse else client_name
 
@@ -88,7 +156,8 @@ def client_dict(c: Client) -> dict:
 
 
 def list_clients(session):
-    return [client_dict(c) for c in session.query(Client).order_by(Client.client_name, Client.warehouse)]
+    return [client_dict(c) for c in session.query(Client).filter(Client.deleted_at.is_(None))
+            .order_by(Client.client_name, Client.warehouse)]
 
 
 def _check_client_free(session, client_name: str, warehouse: str, slug: str, exclude_id=None):
@@ -148,6 +217,78 @@ def _set_tradelanes(session, c: Client, rows) -> None:
                                                 customer_no=customer_no))
 
 
+# ── deleting a client: its setup goes, its synced data stays ────────────────────────────────────────────────────
+
+_ACTIVE_JOBS = ("queued", "running")
+
+
+def _live_client(session, client_id) -> Client:
+    c = session.get(Client, client_id)
+    if not c or c.deleted_at is not None:
+        raise ServiceError("Client not found", 404)
+    return c
+
+
+def client_delete_info(session, client_id):
+    """What deleting this client removes and what it keeps (shown in the confirm dialog)."""
+    c = _live_client(session, client_id)
+    count = lambda q: q.scalar() or 0                                       # noqa: E731
+    return {"id": c.id, "name": c.name,
+            # removed
+            "mapping_versions": count(session.query(func.count(ClientMapping.id)).filter(ClientMapping.client_id == c.id)),
+            "tradelanes": len(c.tradelanes), "users": len(c.grants),
+            # kept
+            "shipments": count(session.query(func.count(Shipment.id)).filter(Shipment.client_id == c.id)),
+            "created_in_tms": count(session.query(func.count(Shipment.id))
+                                    .filter(Shipment.client_id == c.id, Shipment.tms_status == "done")),
+            "jobs": count(session.query(func.count(TmsJob.id)).filter(TmsJob.client_id == c.id)),
+            "active_jobs": count(session.query(func.count(TmsJob.id))
+                                 .filter(TmsJob.client_id == c.id, TmsJob.status.in_(_ACTIVE_JOBS)))}
+
+
+def delete_client(session, actor_id, client_id, confirm_name):
+    """Delete the client's SETUP — its mapping (every version), trade lanes and user access — and hide the client
+    everywhere (Admin, the users' pages, the source sync). Its shipments, containers, files, jobs and videos are KEPT:
+    adding the same client + warehouse again restores it with all of them. Refused while one of its jobs is queued or
+    running, and unless `confirm_name` is the client's name."""
+    c = _live_client(session, client_id)
+    if (confirm_name or "").strip() != c.name:
+        raise ServiceError(f'Type the client name "{c.name}" exactly to confirm')
+    info = client_delete_info(session, client_id)
+    if info["active_jobs"]:
+        raise ServiceError(f"{c.name} has {info['active_jobs']} job(s) queued or running — wait for them to finish "
+                           "before deleting", 409)
+    gone = dict(synchronize_session=False)
+    mapping_ids = [i for (i,) in session.query(ClientMapping.id).filter(ClientMapping.client_id == c.id)]
+    if mapping_ids:
+        session.query(ClientMappingRow).filter(ClientMappingRow.mapping_id.in_(mapping_ids)).delete(**gone)
+        session.query(ClientMapping).filter(ClientMapping.id.in_(mapping_ids)).delete(**gone)
+    session.query(ClientTradeLane).filter(ClientTradeLane.client_id == c.id).delete(**gone)
+    session.query(UserClientAccess).filter(UserClientAccess.client_id == c.id).delete(**gone)
+    c.is_active = False
+    c.tms_customer_no = None
+    c.deleted_at = datetime.datetime.utcnow()
+    audit_svc.audit(session, actor_id, "client.delete", c.name,
+                    f"removed: {info['mapping_versions']} mapping version(s), {info['tradelanes']} trade lane(s), "
+                    f"{info['users']} user grant(s); kept: {info['shipments']} shipment(s) "
+                    f"({info['created_in_tms']} created in TMS), {info['jobs']} job(s)")
+    session.commit()
+    session.expire_all()
+    return {"deleted": client_id, "name": info["name"], "kept_shipments": info["shipments"]}
+
+
+def _restore_deleted(session, actor_id, client_name: str, warehouse: str):
+    """A deleted client with this name + warehouse, brought back (with its old shipments), or None."""
+    c = (session.query(Client).filter(Client.deleted_at.isnot(None),
+                                      func.lower(Client.client_name) == client_name.lower(),
+                                      func.lower(Client.warehouse) == warehouse.lower()).first())
+    if c is None:
+        return None
+    c.deleted_at, c.is_active = None, True
+    audit_svc.audit(session, actor_id, "client.restore", c.name, "added again: its kept shipments are back")
+    return c
+
+
 def create_client(session, actor_id, data):
     client_name = _need(data.get("client_name"), "Client name")
     warehouse = _need(data.get("warehouse"), "Warehouse")
@@ -155,6 +296,13 @@ def create_client(session, actor_id, data):
     slug = slugify(name)
     if not slugify(client_name):
         raise ServiceError("Client name must contain letters or digits")
+    _check_in_source(session, client_name, warehouse)
+    old = _restore_deleted(session, actor_id, client_name, warehouse)
+    if old is not None:                         # the same client was deleted before: bring it back with its shipments
+        old.tms_customer_no = _clean(data.get("tms_customer_no")) or None
+        _set_tradelanes(session, old, data.get("tradelanes") or [])
+        session.commit()
+        return client_dict(old)
     _check_client_free(session, client_name, warehouse, slug)
     c = Client(client_name=client_name, warehouse=warehouse, name=name, slug=slug,
                tms_customer_no=_clean(data.get("tms_customer_no")) or None,
@@ -167,9 +315,7 @@ def create_client(session, actor_id, data):
 
 
 def update_client(session, actor_id, client_id, data):
-    c = session.get(Client, client_id)
-    if not c:
-        raise ServiceError("Client not found", 404)
+    c = _live_client(session, client_id)
     changes = []
     # The client name is permanent (it names the flow code folder); the warehouse can be
     # corrected, which renames the client and its URL slug.
@@ -178,6 +324,7 @@ def update_client(session, actor_id, client_id, data):
         name = display_name(c.client_name, warehouse)
         slug = slugify(name)
         _check_client_free(session, c.client_name, warehouse, slug, exclude_id=c.id)
+        _check_in_source(session, c.client_name, warehouse)
         changes.append(f"warehouse {c.warehouse!r} -> {warehouse!r}")
         c.warehouse, c.name, c.slug = warehouse, name, slug
     if "tms_customer_no" in data:
@@ -403,7 +550,8 @@ def list_users(session, include_inactive=True):
 
 def _set_grants(session, user: User, client_ids):
     wanted = {int(i) for i in (client_ids or [])}
-    valid = {c.id for c in session.query(Client).filter(Client.id.in_(wanted))} if wanted else set()
+    valid = ({c.id for c in session.query(Client).filter(Client.id.in_(wanted), Client.deleted_at.is_(None))}
+             if wanted else set())
     if wanted - valid:
         raise ServiceError("One or more clients do not exist")
     current = {g.client_id: g for g in user.grants}

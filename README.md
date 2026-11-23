@@ -1,166 +1,181 @@
 # TMS Platform
 
-Users select shipments and click **Create**. A background job signs in to TMS with the user's own account and fills the
-order with Playwright.
+Users select shipments on their client page and click **Create**. A background job signs in to TMS (MS Business Central)
+with the user's own account and fills the order with Playwright.
 
 ```
-source DB  ──sync──▶  our DB  ──Create──▶  job  ──▶  browser  ──▶  TMS
+source DB  ──sync──▶  our DB (Postgres)  ──Create──▶  job  ──▶  browser  ──▶  TMS
 ```
+
+Everything a job types comes from **our own DB**; the source is only read when a sync runs.
 
 ## Who does what
 
 | Layer | File | Job |
 |---|---|---|
-| Client file | `clients/<slug>/<slug>.py` | Decides the **text** of each field |
-| Builder | `helpers/order_builder.py` | Decides **where** each value goes |
+| Mapping (per client, in the DB) | Admin > Clients > Mapping (`engine/`) | Decides the **text** of each field |
+| …or a client file | `clients/<slug>/<slug>.py` | The same, in code (used when the client has no published mapping) |
+| Builder | `helpers/order_builder.py` | Decides **where** each value goes; per-container differences |
 | Flow | `helpers/tms_creation.py` | Knows **how to type it** in TMS (selectors) |
 
-Nothing in `helpers/` is per client.
-
-Everything a job types comes from **our own DB**; the source is only read when a sync runs. The one thing kept in code is
-the goods-code table (`helpers/tms_codes.py`).
+Nothing in `helpers/` is per client. A **published mapping wins**; otherwise `clients/<slug>/` is used
+(`helpers/flows.py`).
 
 ### Where things live
 
 | What | File |
 |---|---|
-| Which clients exist | `clients/__init__.py` (`TASK_REGISTRY`) |
-| Finding a customer's file | `helpers/flows.py` |
 | Source row → our DB | `database/source_sync.py` |
-| DB tables | `database/models.py` |
+| DB tables (the schema) | `database/models.py` |
+| Start-up schema upgrade | `database/db.py` (`init_db`), same as SQL in `database/upgrade.sql` |
 | DB → job snapshot | `helpers/jobs.py` (`build_payload`) |
-| Goods name → TMS goods code | `helpers/tms_codes.py` (`GOODS`) |
+| Every TMS field, the mapping's source values, recipes | `engine/catalog.py`, `engine/recipe.py`, `engine/store.py` |
+| Customer no. / trade lane rules | `helpers/tradelanes.py` |
+| Depot name → TMS address no. | `helpers/addresses.py` (table: Admin > Addresses) |
+| Goods name → TMS goods code | `helpers/goods.py` (table: Admin > Goods) |
+| Carrier name → TMS carrier code | `helpers/carriers.py` (table: Admin > Carriers) |
 | Client page (shared by all clients) | `helpers/client_page.py`, `views/client_page/` |
+| Preview (what Create would type) | `helpers/order_preview.py` |
+| Job queue / worker / browser pool | `helpers/jobs.py`, `helpers/tms_worker.py`, `helpers/browser_pool.py` |
 | Screen recordings | `helpers/job_video.py` |
-| Every TMS field + selector, per-client mappings (in the database) | `engine/` (`catalog.py`, `recipe.py`, `store.py`) |
-| Mapping or client file — which one a client uses | `helpers/flows.py` (a published mapping wins, else `clients/<slug>/`) |
+
+---
+
+## The client page (users)
+
+| Feature | How it works |
+|---|---|
+| Month view | Only the selected ATA month is loaded (current month by default; a shipment without ATA counts as this month). Another month / year or **ALL** is fetched when picked. A search looks in every month |
+| Sync | Loads this client's latest shipments from the source |
+| **Edit** | Sets the **customer no. / trade lane** of the selected shipments: pick one of the client's pairs from Admin, or **Type another**. Saved on the shipment (`shipments.route_*`), wins over the Admin rule, never overwritten by a sync. Marked ✎ in the table; **Reset to rule** clears it. Only for shipments not queued / created; every change is in the audit log |
+| **Preview** | Read-only: shows exactly what Create would type (General, Lines, Goods, Remarks). With several containers, a drawer lists each container and the values that differ from the first order |
+| Create | Queues one job per shipment. Shipments with a problem (no trade lane, unknown goods …) are skipped with the reason |
+| Attach | Documents per type (ANDER, CUSTOMS, DN) are uploaded to the order |
+| Video | The screen recording of each real run |
+
+Who can use it: admins on every client, users only on clients granted to them (Admin > Users).
+
+## What the TMS flow does
+
+1. **General** — customer + trade lane (Tradelanes pop-up), then every mapped field. A field hidden behind
+   **Show more** (e.g. VGM Closing) is opened with `button[title="Show more fields"]` and then filled.
+2. **Attach files.**
+3. **Lines** — Depot Out / Depot In: address no., Order Line Ref 1, booked from / until, closing check. Other rows get
+   their booked dates. The **UNLOAD WH** row gets the order's container no. in its *Container No.* column. A depot name
+   not in Admin > Addresses uses the **default address 75121** (`DEFAULT_DEPOT_ADDRESS_NO`), noted in the log.
+4. **Order Cargo** — goods code, quantity, gross weight, and **net weight only if mapped** (column caption "Net Weight").
+5. **Remarks**, revenues, then **Copy Order** for the other containers. Each copy gets its own container no. / seal and
+   is corrected where its container differs (customer ref, depot address / ref / dates, goods, quantity, weights,
+   remarks, UNLOAD WH container no.).
 
 ---
 
 ## Case 1 · Add a new client
 
-For a customer that fills the same TMS fields as the existing ones.
+> A client added in Admin works straight away: its page opens, Sync loads its shipments, users see the data. **Create**
+> stays disabled ("no TMS order flow yet") until it has a published mapping or a client file.
 
-> A client added in Admin works straight away: its page opens, Sync loads its shipments, and users see the data. **Create**
-> stays disabled ("no TMS order flow yet") until steps 1 and 2 below are done.
+Admin > Clients lists every client + warehouse found in the source that is not set up yet (**New in source**, with
+its row count). **Add** fills in the name and warehouse exactly as the source spells them. **Sync names** copies
+every client and warehouse name from the source into the Add client suggestions. Adding (or changing the warehouse of)
+a client is **refused when that name + warehouse pair is not in the source**, so a typo or a wrong alias can't create
+a client that never syncs.
 
-**1. Create the client file.** Copy `clients/emvia/` to `clients/<slug>/` and rename the file inside it:
-
-```
-clients/acme/__init__.py      (empty)
-clients/acme/acme.py
-```
-
-In `acme.py` set the blueprint name to the slug, then adjust `general(v)`, `lines(v)`, `cargo(v)` and `remarks(v)`.
-Each returns the final text of its fields; a field you don't return stays empty.
-
-```python
-bp = client_page.make_blueprint("acme")
-```
-
-> The slug must equal the slug of the client name in Admin (`Emvia - NNRC` → `emvia`). Otherwise the job fails with
-> *"There is no TMS order flow for X yet"*.
-
-**2. Register it** in `clients/__init__.py`, then restart the platform.
-
-```python
-from clients.acme.acme import bp as acme_bp
-TASK_REGISTRY = [emvia_bp, sabic_bp, acme_bp]
-```
-
-**3. Set it up in Admin.**
+**1. Set it up in Admin.**
 
 | Tab | Do |
 |---|---|
-| Clients | Client name, warehouse, TMS customer no., trade lane rows. A row matches on carrier (`ALL` = any) and optionally container type (empty = any); the most specific match wins: carrier + type, then carrier, then type, then `ALL`. A row may carry its own customer no.; otherwise a less specific row's, else the client's, is used (`helpers/tradelanes.py`) |
+| Clients | Client name, warehouse, TMS customer no., trade lane rows. A row matches on carrier (`ALL` = any) and optionally container type (empty = any); the most specific match wins: carrier + type, then carrier, then type, then `ALL`. A row may carry its own customer no.; otherwise a less specific row's, else the client's |
+| Clients > Mapping | Map every TMS field to our values (or copy another client's template), check it on **Preview**, then **Publish** |
 | Users | Create users, grant the client, set each user's own TMS username and password |
-| Carriers & Addresses | Map every carrier and depot the client uses. Unmapped depots block sending |
+| Addresses / Carriers / Goods | Map every depot, carrier and goods name the client uses |
 
-**4. Check the source.** Sync only reads rows whose `client_name` + `warehouse` match an active client. If Sync finds
+**2. Check the source.** Sync only reads rows whose `client_name` + `warehouse` match an active client. If Sync finds
 0 rows, the spelling differs in the source.
-
-**5. Goods.** A goods name with no TMS code is refused. Add it to `GOODS` in `helpers/tms_codes.py`.
 
 **Checklist**
 
-- [ ] `clients/<slug>/__init__.py` and `<slug>.py` exist, with `make_blueprint("<slug>")`
-- [ ] Added to `TASK_REGISTRY`, platform restarted
-- [ ] Client added in Admin (name slug = file slug), TMS customer no., trade lane(s)
+- [ ] Client added in Admin, TMS customer no., trade lane(s)
+- [ ] Mapping published (or a client file, see below)
 - [ ] Users granted, TMS logins set
-- [ ] Carriers and depot addresses mapped
-- [ ] New goods names added to `tms_codes.GOODS`
-- [ ] Sync returns rows, and one test shipment goes through
+- [ ] Depot addresses, carriers and goods names mapped
+- [ ] Sync returns rows; Preview looks right; one test shipment goes through
+
+**Removing a client.** **Deactivate** only hides it (everything is kept, reactivate any time). The 🗑 **Delete** button
+removes the client's **setup** — its mapping (every version), trade lanes and user access — and hides it from Admin,
+the users' pages and the sync. Its **shipments, files, jobs, logs and videos are kept**. Adding the same client +
+warehouse again restores it with all of them, including their "created in TMS" status (no duplicate orders); set up
+its trade lanes and mapping again. The dialog asks for the client name and is refused while a job is queued or running.
+
+### The mapping (Admin > Clients > Mapping)
+
+Each TMS field gets a *recipe* (`engine/recipe.py`), stored as JSON:
+
+| Setting | Meaning |
+|---|---|
+| parts | One or more values (or fixed texts), e.g. ITOS no. + ATA date |
+| separator | What goes between them (`/`) |
+| join / first filled | All filled parts joined, or only the first one that has a value |
+| time | `10:00` typed after a date |
+| **date format** | How a date is written **inside a text field** (Customer Ref. …): TMS default `MM/dd/yyyy`, or `dd/MM`, `dd/MM/yyyy`, `dd-MM`, `ddMM`, `yyyy-MM-dd` … e.g. ITOS / ATA with `dd/MM` → `65767/12/11`. Real date fields always keep TMS's own format |
+
+Some clients send the goods in the source column `adr_nadr` instead of `goods`: the sync copies `adr_nadr` into
+`goods` when `goods` is empty, so the goods mapping works the same for every client (add the NADR / ADR names in
+Admin > Goods).
+
+### A client file instead of a mapping
+
+Copy `clients/emvia/` to `clients/<slug>/`, set `bp = client_page.make_blueprint("<slug>")`, adjust `general(v)`,
+`lines(v)`, `cargo(v)`, `remarks(v)`, and add it to `TASK_REGISTRY` in `clients/__init__.py`, then restart. The slug
+must equal the slug of the client name in Admin (`Emvia - NNRC` → `emvia`).
 
 ---
 
-## Case 2 · New client with new fields
-
-Do Case 1 first, then add the field. If the value already exists on `v`, you only need steps 5 and 6.
+## Case 2 · A new value from the source
 
 | # | File | Do |
 |---|---|---|
-| 1 | `database/source_sync.py` | Add the source column to `COLUMNS` and map it in `SHIPMENT_MAP` (per shipment) or `CONTAINER_FIELDS` (per container). Dates and numbers also need their converter in `parse_row()` |
-| 2 | `database/models.py` | Add the column to `Shipment` (and `ShipmentContainer` if containers can differ) |
-| 3 | `helpers/jobs.py` | Add it to the `"shipment"` dict in `build_payload`. Per-container values also go in `OWN_VALUES` |
-| 4 | `engine/catalog.py` | Add `(name, label, kind)` to `SOURCE_VALUES`: the Admin mapping dropdown offers it, and client files can use `v.<name>` |
-| 5 | `clients/<slug>/<slug>.py` | Return it from the right function (table below) |
-| 6 | `helpers/tms_creation.py` | Add the selector and typing line (below) |
+| 1 | `database/source_sync.py` | Add the source column to `COLUMNS`; map it in `SHIPMENT_MAP` (per shipment, also per container automatically) or `CONTAINER_FIELDS`. Numbers that are summed for duplicate container rows go in `WEIGHTS` |
+| 2 | `database/models.py` | Add the column to `Shipment` (and `ShipmentContainer` if containers can differ), `nullable=True` |
+| 3 | `database/upgrade.sql` | Add the same `ALTER TABLE … ADD COLUMN IF NOT EXISTS` line |
+| 4 | `helpers/jobs.py` | Add it to the payload in `build_payload` (per-container values also in `OWN_VALUES`) |
+| 5 | `engine/catalog.py` | Add `(name, label, kind)` to `SOURCE_VALUES`: the mapping dropdown offers it, client files get `v.<name>` |
 
-> **Step 2 is applied on the next start.** A new column that may be empty (`nullable=True`, no default) is added to the
-> existing table automatically (`database/db.py` → `_add_new_columns`). A required column, a type change or a removed
-> column is still refused at startup: alter that table by hand. A new table is simply created.
-> The same changes are written out as SQL in `database/upgrade.sql` (safe to run more than once) for an existing
-> production database; add a line there for every new column. A fresh database needs none of it.
->
-> To offer the value in the Admin mapping dropdown, also add it to `SOURCE_VALUES` in `engine/catalog.py` (that also
-> makes it available as `v.<name>` in client files, so step 4 is automatic).
+## Case 3 · A new TMS field
 
-### Step 5 · Which function
-
-| TMS area | Function | Return | Allowed names in `order_builder.py` |
-|---|---|---|---|
-| General tab | `general(v)` | `"newField": text` | `GENERAL_FIELDS` |
-| Lines | `lines(v)` | `{"DEPOT OUT": {"newValue": text}}` | `LINE_VALUES` |
-| Order Cargo | `cargo(v)` | `"newValue": text` | `CARGO_VALUES` |
-| Order Remarks | `remarks(v)` | the text | — |
-
-A name that is not on the list stops the platform at load with *"unknown name(s) returned"*.
-
-### Step 6 · The selector
-
-**General tab.** One line in `general_tab()`:
-
-```python
-self.fill("Field label", "Control Name", R.get("newField"), lookup=False, date=False)
-```
-
-- **Control Name:** in TMS press F12, select the field, and copy the `controlname` attribute of its
-  `.ms-nav-edit-control-container`.
-- `lookup=True` for dropdown fields, `date=True` for dates, `vat=True` if TMS then asks the VAT question.
-- If copied orders may need a different value, also add the field to `PER_ORDER_GENERAL`.
-
-**Lines or Cargo column.** One line in `lines_tab()` or `cargo_tab()`. The column is found by its header caption:
-
-```python
-self.step("Cargo", n + 1, cap, key, "Column caption", C.get("newValue"))
-```
-
-Also add the value where `build_job` builds the line or cargo dict, and to `wanted_changes()` / `apply_changes()` if a
-container can differ from the first order.
-
-> A new `fill(...)` line is skipped for every client whose `general()` doesn't return that key, so adding it never
-> changes other clients.
-
-### Files touched, at a glance
-
-| Situation | Files |
+| Where in TMS | Do |
 |---|---|
-| Only different text or format for this client | `clients/<slug>/<slug>.py` |
-| Existing value, new TMS field | + `order_builder.py` (allowed names), `tms_creation.py` (selector) |
-| Brand-new data from the source | + `source_sync.py`, `models.py` (**fresh `app.db`**), `jobs.py`, `order_builder.py` (`VALUE_NAMES`) |
-| New goods | `tms_codes.py` |
-| New carrier or depot | Admin > Carriers & Addresses (no code) |
-| Show it in the client table | `client_page.py`, `views/client_page/index.html`, `client_page.js` |
+| General tab | Add a `Field(key, label, controlname, kind)` to `GENERAL` in `engine/catalog.py`. The flow fills every catalogue field in order; `per_order=True` if copies may need another value |
+| Lines / Cargo column | Add it to `LINES` / `CARGO` in `engine/catalog.py`, to `build_job` in `order_builder.py`, and a `self.step(...)` line in `lines_tab()` / `cargo_tab()` (the column is found by its header caption). If a container can differ: `wanted_changes()` / `apply_changes()` |
+
+- **controlname:** in TMS press F12, select the field, copy the `controlname` attribute of its
+  `.ms-nav-edit-control-container`.
+- An empty value is never typed, so a new field changes nothing for clients that don't map it.
+
+---
+
+## Deploying to production
+
+The app upgrades the database itself on start (`database/db.py` → `init_db`):
+
+- new tables are created; new **nullable** columns are added to existing tables (`ADD COLUMN IF NOT EXISTS`);
+- the known index changes in `_UPGRADES` are applied;
+- then the schema is checked against `database/models.py` — a missing column stops the start with a clear message.
+
+**Nothing is dropped or deleted** — existing rows keep their data and get empty values in new columns.
+
+Steps:
+
+1. Back up the production database.
+2. Deploy the code; restart the **app and the worker**.
+3. Users hard-refresh the page (Ctrl+F5).
+
+Only if the app's DB user may **not** `ALTER TABLE`: run `database/upgrade.sql` once as a DB admin
+(`psql -h <host> -U <user> -d <db> -f database/upgrade.sql`; safe to run more than once; the check query at the end
+lists the columns).
+
+A required column, a type change or a removed column is never done automatically: alter that table by hand.
+Never run `database/seed_sample.py` on production (it is sample data and deletes shipments).
 
 ---
 
@@ -168,13 +183,16 @@ container can differ from the first order.
 
 | Variable | Meaning |
 |---|---|
-| `TMS_CREATE_ENABLED` | `true` = really create orders. `false` = dry run: sign in and reach the Orders list, create nothing |
-| `TMS_HEADLESS` | `0` = browser window visible (testing), `1` = hidden (server) |
-| `TMS_FLOW_ENGINE` | `native` = the Playwright flow in `tms_creation.py` |
-| `TMS_BROWSERS`, `TMS_SLOTS` | Browsers in the pool × job slots each (default 3 × 3 = 9 jobs at once) |
-| `TMS_COPY_WAIT` | Seconds to wait for TMS to finish making the copies after OK in Copy Order (default 180) |
+| `APP_PG_HOST`, `APP_PG_PORT`, `APP_PG_USER`, `APP_PG_PASSWORD`, `APP_PG_DATABASE` | Our database |
 | `SRC_PG_*`, `SRC_TABLE` | The source database and table |
 | `SYNC_INTERVAL_MINUTES` | Automatic sync interval (`0` = manual Sync only) |
+| `TMS_CREATE_ENABLED` | `true` = really create orders. `false` = dry run: sign in and reach the Orders list, create nothing |
+| `TMS_HEADLESS` | `0` = browser window visible (testing), `1` = hidden (server) |
+| `TMS_BROWSERS`, `TMS_SLOTS` | Browsers in the pool × job slots each (default 3 × 3 = 9 jobs at once) |
+| `TMS_COPY_WAIT` | Seconds to wait for TMS to finish the copies after OK in Copy Order (default 180) |
+| `TMS_DATE_FORMAT` | How TMS reads dates (`dmy` = day/month/year; default month/day/year) |
+| `DEFAULT_DEPOT_ADDRESS_NO` | Address no. used for a depot not in Admin > Addresses (default `75121`) |
+| `JWT_SECRET`, `CREDENTIALS_KEY` | Login tokens and the encryption of stored TMS passwords — keep them secret and unchanged |
 
 ## Job videos
 

@@ -294,6 +294,17 @@
             </div>
           </div>
 
+          <div class="panel full" id="source-new-panel">
+            <div class="panel-head"><h2>New in source <span class="count-chip" id="source-new-count"></span></h2>
+              <p class="panel-sub">Clients in the source database that are not set up here yet. Add one to load its shipments.
+                <b>Sync names</b> copies every client and warehouse name from the source into the Add client suggestions,
+                so names are picked, never typed.</p></div>
+            <div class="toolbar"><input type="search" id="source-new-search" class="search-input" placeholder="Search client or warehouse" />
+              <button class="primary" id="source-names-btn">Sync names</button>
+              <button class="primary secondary" id="source-new-toggle" aria-expanded="false">Show list</button></div>
+            <div class="table-scroll" id="source-new-body" style="max-height:320px;overflow-y:auto;display:none"></div>
+          </div>
+
           <div class="panel full">
             <div class="panel-head"><h2>All clients <span class="count-chip" id="clients-count"></span></h2></div>
             <div class="toolbar">

@@ -436,6 +436,7 @@
           <button class="icon" title="Edit" aria-label="Edit" data-edit-client="${c.id}">${ICON_EDIT}</button>
           ${c.is_active ? `<button class="icon danger" title="Deactivate" aria-label="Deactivate" data-toggle-client="${c.id}">${ICON_OFF}</button>`
         : `<button class="icon reactivate" title="Reactivate" aria-label="Reactivate" data-toggle-client="${c.id}">${ICON_ON}</button>`}
+          <button class="icon danger" title="Delete client (its mapping and setup; shipments are kept)" aria-label="Delete" data-delete-client="${c.id}">${ICON_DELETE}</button>
         </div></td>
       </tr>`).join("") : emptyRow(8, clientsCache.length ? "No clients match these filters." : "No clients yet.");
 
@@ -443,11 +444,48 @@
       b.addEventListener("click", () => startEditClient(+b.dataset.editClient)));
     document.querySelectorAll("[data-map-client]").forEach(b =>
       b.addEventListener("click", () => MappingEditor.open(+b.dataset.mapClient)));
+    document.querySelectorAll("[data-delete-client]").forEach(b =>
+      b.addEventListener("click", () => deleteClient(+b.dataset.deleteClient)));
     document.querySelectorAll("[data-toggle-client]").forEach(b => b.addEventListener("click", async () => {
       const c = clientsCache.find(x => x.id === +b.dataset.toggleClient);
       try { await api(`/api/admin/clients/${c.id}`, { method: "PUT", body: { is_active: !c.is_active } }); await loadClientsTab(); }
       catch (e) { ui.toast(e.message, "error"); }
     }));
+  }
+
+  // Delete a client's setup (mapping, trade lanes, user access) and hide it; its shipments and jobs are kept.
+  // The dialog shows what goes; the client name must be typed to confirm (the server checks it again).
+  async function deleteClient(id) {
+    let info;
+    try { info = await api(`/api/admin/clients/${id}/delete-info`); }
+    catch (e) { ui.toast(e.message, "error"); return; }
+    if (info.active_jobs) {
+      ui.toast(`${info.name} has ${info.active_jobs} job(s) queued or running — wait for them to finish first.`, "error");
+      return;
+    }
+    const n = (v, one, many) => `<b>${v}</b> ${v === 1 ? one : many}`;
+    const shown = ui.confirm({
+      title: `Delete client "${info.name}"?`, danger: true, confirmText: "Delete", html: true,
+      text: `<b>Removed:</b> the field mapping (${n(info.mapping_versions, "version", "versions")}),
+        ${n(info.tradelanes, "trade lane", "trade lanes")} and ${n(info.users, "user's access", "users' access")}.
+        The client disappears from Admin, the users' pages and the sync.<br><br>
+        <b>Kept safely:</b> ${n(info.shipments, "shipment", "shipments")}${info.created_in_tms ? ` (${info.created_in_tms} created in TMS)` : ""}
+        and ${n(info.jobs, "job", "jobs")} with their files, logs and videos. Adding <b>${esc(info.name)}</b> again later
+        brings them all back, with their TMS status.
+        <label style="display:block;margin-top:12px">Type <b>${esc(info.name)}</b> to confirm
+          <input id="del-client-name" type="text" autocomplete="off" style="display:block;width:100%;margin-top:6px" /></label>`,
+    });
+    let typed = "";
+    const input = document.getElementById("del-client-name");
+    if (input) { input.addEventListener("input", () => { typed = input.value; }); setTimeout(() => input.focus(), 50); }
+    if (!await shown) return;
+    if (typed.trim() !== info.name) { ui.toast(`Not deleted — the name typed was not "${info.name}".`, "error"); return; }
+    try {
+      await api(`/api/admin/clients/${id}`, { method: "DELETE", body: { confirm_name: typed.trim() } });
+      if (editingClientId === id) resetClientForm();
+      ui.toast(`${info.name} deleted.`, "success");
+      await loadClientsTab();
+    } catch (e) { ui.toast(e.message, "error"); }
   }
 
   // Shipment source sync (database/source_sync.py)
@@ -488,10 +526,74 @@
       $("lookup-container-types").innerHTML = opts(l.container_types || []);
       if (!document.querySelector("#tradelane-rows .lane-row")) resetClientForm();
     }).catch(() => {});
+    loadSourceNew();                               // not awaited: a slow source never holds up the tab
     await loadCatalog();
     fillClientSelects();
     updateUserStatCards();
     renderClientsTables();
+  }
+
+  // Source clients (client_name + warehouse) that are not a client here yet: "Add" fills the Add client form.
+  async function loadSourceNew() {
+    const panel = $("source-new-panel"), body = $("source-new-body");
+    let r;
+    try { r = await api("/api/admin/clients/source-new"); }
+    catch (e) { r = { error: e.message, clients: [] }; }
+    if (r.error) {
+      panel.style.display = "";
+      $("source-new-count").textContent = "";
+      body.innerHTML = `<p class="panel-sub">Could not read the source: ${esc(r.error)}</p>`;
+      return;
+    }
+    sourceNew = r.clients;
+    renderSourceNew();
+  }
+  // Sync names: the source's client + warehouse names into the Add client suggestions (source_lookups)
+  $("source-names-btn").addEventListener("click", async () => {
+    const btn = $("source-names-btn");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/admin/lookups/sync", { method: "POST" });
+      const c = r.clients_added.length, w = r.warehouses_added.length;
+      ui.toast(c || w ? `Added ${c} client name(s) and ${w} warehouse(s) from the source.`
+                      : "Names are up to date: nothing new in the source.", "success");
+      await loadClientsTab();
+    } catch (e) { ui.toast(e.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  var sourceNew = [];
+  // the list opens / closes; closed by default, the choice is remembered in this browser
+  function setSourceNewOpen(open) {
+    $("source-new-body").style.display = open ? "" : "none";
+    $("source-new-toggle").textContent = open ? "Hide list" : "Show list";
+    $("source-new-toggle").setAttribute("aria-expanded", String(open));
+    try { localStorage.setItem("admin.sourceNewOpen", open ? "1" : "0"); } catch (e) { /* storage blocked */ }
+  }
+  $("source-new-toggle").addEventListener("click", () => setSourceNewOpen($("source-new-body").style.display === "none"));
+  try { setSourceNewOpen(localStorage.getItem("admin.sourceNewOpen") === "1"); } catch (e) { setSourceNewOpen(false); }               // hoisted: loadSourceNew may run before this line
+  $("source-new-search").addEventListener("input", () => {
+    if ($("source-new-search").value.trim()) setSourceNewOpen(true);      // searching opens the list
+    renderSourceNew();
+  });
+  function renderSourceNew() {
+    const body = $("source-new-body"), q = $("source-new-search").value.trim().toLowerCase();
+    const r = { clients: sourceNew.filter(c => !q || `${c.client_name} ${c.warehouse}`.toLowerCase().includes(q)) };
+    $("source-new-count").textContent = r.clients.length === sourceNew.length ? `${sourceNew.length}` : `${r.clients.length} of ${sourceNew.length}`;
+    body.innerHTML = `<table><thead><tr><th>Client name</th><th>Warehouse</th><th class="num">Source rows</th><th></th></tr></thead><tbody>
+      ${r.clients.map((c, i) => `<tr>
+        <td>${esc(c.client_name)}${c.deleted ? ` ${badge("deleted, adding restores it", "inactive")}` : ""}</td>
+        <td>${c.warehouse ? esc(c.warehouse) : badge("no warehouse", "inactive")}</td>
+        <td class="num">${Number(c.rows).toLocaleString()}</td>
+        <td><div class="row-actions"><button data-source-add="${i}">Add</button></div></td></tr>`).join("")}
+      </tbody></table>`;
+    body.querySelectorAll("[data-source-add]").forEach(b => b.addEventListener("click", () => {
+      const c = r.clients[+b.dataset.sourceAdd];
+      resetClientForm();
+      $("client-name").value = c.client_name;
+      $("client-warehouse").value = c.warehouse;
+      $("client-form-title").scrollIntoView({ behavior: "smooth", block: "start" });
+      ui.toast(`${c.client_name}: fill in the TMS customer no. and trade lanes, then Add client.`, "success");
+    }));
   }
 
   // ═══════════════════════════════════════════════════════════════════
