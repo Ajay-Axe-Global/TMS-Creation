@@ -41,6 +41,12 @@ def clients_list(session, actor):
     return service.list_clients(session)
 
 
+@bp.route("/clients/source-new", methods=["GET"])
+@api
+def clients_source_new(session, actor):
+    return service.new_source_clients(session)
+
+
 @bp.route("/clients", methods=["POST"])
 @api
 def clients_create(session, actor):
@@ -121,6 +127,12 @@ def mapping_preview(session, actor, client_id):
 
 
 # Source names (customer / warehouse suggestions for the Add client form)
+@bp.route("/lookups/sync", methods=["POST"])
+@api
+def lookups_sync(session, actor):
+    return service.sync_lookups(session, actor)
+
+
 @bp.route("/lookups", methods=["GET"])
 @api
 def lookups_list(session, actor):

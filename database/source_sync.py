@@ -91,8 +91,8 @@ class SourceBusy(SourceError):
 
 # ── reading the source ──────────────────────────────────────────────────────
 
-def fetch_rows(pairs: list[tuple[str, str]]) -> list[dict]:
-    """The source rows of the given (client_name, warehouse) pairs — filtered in the database, not here."""
+def _source():
+    """(psycopg2, sql, extras, table identifier, table name), or SourceError when the source is not configured."""
     try:
         import psycopg2
         import psycopg2.extras
@@ -106,10 +106,11 @@ def fetch_rows(pairs: list[tuple[str, str]]) -> list[dict]:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?", table):
         raise SourceError(f"SRC_TABLE {table!r} is not a valid table name")
     ident = sql.SQL(".").join(sql.Identifier(p) for p in table.split("."))
-    match = sql.SQL("(lower(btrim(client_name)) = %s AND lower(btrim(coalesce(warehouse, ''))) = %s)")
-    query = sql.SQL("SELECT {} FROM {} WHERE {}").format(
-        sql.SQL(", ").join(map(sql.Identifier, COLUMNS)), ident, sql.SQL(" OR ").join([match] * len(pairs)))
-    params = [v for name, wh in pairs for v in (name.strip().lower(), (wh or "").strip().lower())]
+    return psycopg2, sql, psycopg2.extras, ident, table
+
+
+def _query(query, params=()) -> list[dict]:
+    psycopg2, _sql, extras, _ident, table = _source()
     try:
         conn = psycopg2.connect(host=os.environ["SRC_PG_HOST"], port=os.getenv("SRC_PG_PORT", "5432"),
                                 user=os.environ["SRC_PG_USER"], password=os.environ["SRC_PG_PASSWORD"],
@@ -118,13 +119,31 @@ def fetch_rows(pairs: list[tuple[str, str]]) -> list[dict]:
         raise SourceError(f"Cannot connect to the source database: {str(e).strip().splitlines()[0]}")
     try:
         conn.set_session(readonly=True)
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
             cur.execute(query, params)
             return [dict(r) for r in cur.fetchall()]
     except psycopg2.Error as e:
         raise SourceError(f"Reading {table} failed: {str(e).strip().splitlines()[0]}")
     finally:
         conn.close()
+
+
+def source_clients() -> list[dict]:
+    """Every (client_name, warehouse) in the source with its row count, for Admin's "New in source" list."""
+    _p, sql, _e, ident, _t = _source()
+    return _query(sql.SQL("SELECT btrim(client_name) AS client_name, btrim(coalesce(warehouse, '')) AS warehouse, "
+                          "count(*) AS rows FROM {} WHERE coalesce(btrim(client_name), '') <> '' "
+                          "GROUP BY 1, 2 ORDER BY lower(btrim(client_name)), 2").format(ident))
+
+
+def fetch_rows(pairs: list[tuple[str, str]]) -> list[dict]:
+    """The source rows of the given (client_name, warehouse) pairs — filtered in the database, not here."""
+    _p, sql, _e, ident, _t = _source()
+    match = sql.SQL("(lower(btrim(client_name)) = %s AND lower(btrim(coalesce(warehouse, ''))) = %s)")
+    query = sql.SQL("SELECT {} FROM {} WHERE {}").format(
+        sql.SQL(", ").join(map(sql.Identifier, COLUMNS)), ident, sql.SQL(" OR ").join([match] * len(pairs)))
+    params = [v for name, wh in pairs for v in (name.strip().lower(), (wh or "").strip().lower())]
+    return _query(query, params)
 
 
 # ── parsing one row ─────────────────────────────────────────────────────────

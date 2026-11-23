@@ -70,6 +70,72 @@ def list_lookups(session):
     return out
 
 
+def sync_lookups(session, actor_id):
+    """Copy every client name and warehouse name the source has into source_lookups (the Add client suggestions).
+    Only adds; a name is the source's own spelling, so picking it can't be a typo."""
+    from database import source_sync
+    try:
+        pairs = source_sync.source_clients()
+    except source_sync.SourceError as e:
+        raise ServiceError(str(e), 502)
+    have = {(r.kind, r.name.strip().lower()) for r in session.query(SourceLookup)}
+    added = {"client": [], "warehouse": []}
+    for p in pairs:
+        for kind, name in (("client", p["client_name"]), ("warehouse", p["warehouse"])):
+            name = (name or "").strip()
+            if name and (kind, name.lower()) not in have:
+                session.add(SourceLookup(kind=kind, name=name[:255]))
+                have.add((kind, name.lower()))
+                added[kind].append(name)
+    if added["client"] or added["warehouse"]:
+        audit_svc.audit(session, actor_id, "lookups.sync", "source names",
+                        f"{len(added['client'])} client name(s), {len(added['warehouse'])} warehouse(s) added")
+    session.commit()
+    return {"clients_added": added["client"], "warehouses_added": added["warehouse"], "pairs": len(pairs)}
+
+
+def _check_in_source(session, client_name: str, warehouse: str):
+    """A client is only synced when its name + warehouse match a source row, so refuse a pair the source doesn't have
+    (typo, wrong alias). Source unreachable: both names must at least be known source spellings (Sync names)."""
+    from database import source_sync
+    want = (client_name.strip().lower(), warehouse.strip().lower())
+    try:
+        pairs = source_sync.source_clients()
+    except source_sync.SourceError:
+        known = {(r.kind, r.name.strip().lower()) for r in session.query(SourceLookup)}
+        if ("client", want[0]) in known and ("warehouse", want[1]) in known:
+            return
+        raise ServiceError(f'The source database can\'t be reached and "{client_name}" / "{warehouse}" is not a known '
+                           "source spelling. Pick the names from the suggestions, or try again when the source is back.")
+    if any((p["client_name"].lower(), p["warehouse"].lower()) == want for p in pairs):
+        return
+    others = sorted({p["warehouse"] for p in pairs if p["client_name"].lower() == want[0] and p["warehouse"]})
+    if others:
+        raise ServiceError(f'"{client_name}" is in the source only with warehouse: {", ".join(others)}. Pick one of these.')
+    raise ServiceError(f'"{client_name}" with warehouse "{warehouse}" is not in the source database, so the sync would '
+                       "find no shipments. Check the spelling: pick it from the suggestions or from New in source "
+                       "(click Sync names first if it is new).")
+
+
+def new_source_clients(session):
+    """The source's client + warehouse pairs that are not a client here yet (a deleted one is listed too: adding it
+    restores it). Source unreachable: an error message instead of a list, the Admin page still works."""
+    from database import source_sync
+    try:
+        pairs = source_sync.source_clients()
+    except source_sync.SourceError as e:
+        return {"error": str(e), "clients": []}
+    key = lambda n, w: ((n or "").strip().lower(), (w or "").strip().lower())        # noqa: E731
+    have = {key(c.client_name, c.warehouse): c for c in session.query(Client)}
+    out = []
+    for p in pairs:
+        c = have.get(key(p["client_name"], p["warehouse"]))
+        if c is None or c.deleted_at is not None:
+            out.append({"client_name": p["client_name"], "warehouse": p["warehouse"], "rows": p["rows"],
+                        "deleted": c is not None})
+    return {"error": None, "clients": out}
+
+
 def display_name(client_name: str, warehouse: str) -> str:
     return f"{client_name} - {warehouse}" if warehouse else client_name
 
@@ -230,6 +296,7 @@ def create_client(session, actor_id, data):
     slug = slugify(name)
     if not slugify(client_name):
         raise ServiceError("Client name must contain letters or digits")
+    _check_in_source(session, client_name, warehouse)
     old = _restore_deleted(session, actor_id, client_name, warehouse)
     if old is not None:                         # the same client was deleted before: bring it back with its shipments
         old.tms_customer_no = _clean(data.get("tms_customer_no")) or None
@@ -257,6 +324,7 @@ def update_client(session, actor_id, client_id, data):
         name = display_name(c.client_name, warehouse)
         slug = slugify(name)
         _check_client_free(session, c.client_name, warehouse, slug, exclude_id=c.id)
+        _check_in_source(session, c.client_name, warehouse)
         changes.append(f"warehouse {c.warehouse!r} -> {warehouse!r}")
         c.warehouse, c.name, c.slug = warehouse, name, slug
     if "tms_customer_no" in data:

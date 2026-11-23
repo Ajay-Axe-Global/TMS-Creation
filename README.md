@@ -75,6 +75,12 @@ Who can use it: admins on every client, users only on clients granted to them (A
 > A client added in Admin works straight away: its page opens, Sync loads its shipments, users see the data. **Create**
 > stays disabled ("no TMS order flow yet") until it has a published mapping or a client file.
 
+Admin > Clients lists every client + warehouse found in the source that is not set up yet (**New in source**, with
+its row count). **Add** fills in the name and warehouse exactly as the source spells them. **Sync names** copies
+every client and warehouse name from the source into the Add client suggestions. Adding (or changing the warehouse of)
+a client is **refused when that name + warehouse pair is not in the source**, so a typo or a wrong alias can't create
+a client that never syncs.
+
 **1. Set it up in Admin.**
 
 | Tab | Do |

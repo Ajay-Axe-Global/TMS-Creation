@@ -526,10 +526,74 @@
       $("lookup-container-types").innerHTML = opts(l.container_types || []);
       if (!document.querySelector("#tradelane-rows .lane-row")) resetClientForm();
     }).catch(() => {});
+    loadSourceNew();                               // not awaited: a slow source never holds up the tab
     await loadCatalog();
     fillClientSelects();
     updateUserStatCards();
     renderClientsTables();
+  }
+
+  // Source clients (client_name + warehouse) that are not a client here yet: "Add" fills the Add client form.
+  async function loadSourceNew() {
+    const panel = $("source-new-panel"), body = $("source-new-body");
+    let r;
+    try { r = await api("/api/admin/clients/source-new"); }
+    catch (e) { r = { error: e.message, clients: [] }; }
+    if (r.error) {
+      panel.style.display = "";
+      $("source-new-count").textContent = "";
+      body.innerHTML = `<p class="panel-sub">Could not read the source: ${esc(r.error)}</p>`;
+      return;
+    }
+    sourceNew = r.clients;
+    renderSourceNew();
+  }
+  // Sync names: the source's client + warehouse names into the Add client suggestions (source_lookups)
+  $("source-names-btn").addEventListener("click", async () => {
+    const btn = $("source-names-btn");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/admin/lookups/sync", { method: "POST" });
+      const c = r.clients_added.length, w = r.warehouses_added.length;
+      ui.toast(c || w ? `Added ${c} client name(s) and ${w} warehouse(s) from the source.`
+                      : "Names are up to date: nothing new in the source.", "success");
+      await loadClientsTab();
+    } catch (e) { ui.toast(e.message, "error"); }
+    finally { btn.disabled = false; }
+  });
+  var sourceNew = [];
+  // the list opens / closes; closed by default, the choice is remembered in this browser
+  function setSourceNewOpen(open) {
+    $("source-new-body").style.display = open ? "" : "none";
+    $("source-new-toggle").textContent = open ? "Hide list" : "Show list";
+    $("source-new-toggle").setAttribute("aria-expanded", String(open));
+    try { localStorage.setItem("admin.sourceNewOpen", open ? "1" : "0"); } catch (e) { /* storage blocked */ }
+  }
+  $("source-new-toggle").addEventListener("click", () => setSourceNewOpen($("source-new-body").style.display === "none"));
+  try { setSourceNewOpen(localStorage.getItem("admin.sourceNewOpen") === "1"); } catch (e) { setSourceNewOpen(false); }               // hoisted: loadSourceNew may run before this line
+  $("source-new-search").addEventListener("input", () => {
+    if ($("source-new-search").value.trim()) setSourceNewOpen(true);      // searching opens the list
+    renderSourceNew();
+  });
+  function renderSourceNew() {
+    const body = $("source-new-body"), q = $("source-new-search").value.trim().toLowerCase();
+    const r = { clients: sourceNew.filter(c => !q || `${c.client_name} ${c.warehouse}`.toLowerCase().includes(q)) };
+    $("source-new-count").textContent = r.clients.length === sourceNew.length ? `${sourceNew.length}` : `${r.clients.length} of ${sourceNew.length}`;
+    body.innerHTML = `<table><thead><tr><th>Client name</th><th>Warehouse</th><th class="num">Source rows</th><th></th></tr></thead><tbody>
+      ${r.clients.map((c, i) => `<tr>
+        <td>${esc(c.client_name)}${c.deleted ? ` ${badge("deleted, adding restores it", "inactive")}` : ""}</td>
+        <td>${c.warehouse ? esc(c.warehouse) : badge("no warehouse", "inactive")}</td>
+        <td class="num">${Number(c.rows).toLocaleString()}</td>
+        <td><div class="row-actions"><button data-source-add="${i}">Add</button></div></td></tr>`).join("")}
+      </tbody></table>`;
+    body.querySelectorAll("[data-source-add]").forEach(b => b.addEventListener("click", () => {
+      const c = r.clients[+b.dataset.sourceAdd];
+      resetClientForm();
+      $("client-name").value = c.client_name;
+      $("client-warehouse").value = c.warehouse;
+      $("client-form-title").scrollIntoView({ behavior: "smooth", block: "start" });
+      ui.toast(`${c.client_name}: fill in the TMS customer no. and trade lanes, then Add client.`, "success");
+    }));
   }
 
   // ═══════════════════════════════════════════════════════════════════
