@@ -67,6 +67,9 @@ CARGO = (
     Field("quantity", "Quantity", kind="number"),
     Field("grossWeight", "Gross Weight", kind="number"),
     Field("netWeight", "Net Weight", kind="number"),       # typed only when the client's mapping fills it
+    # typed only for ADR goods / only for NADR goods (the container's ADR / NADR value); not mapped = the product
+    Field("adrDescription", "ADR Description (ADR goods only)"),
+    Field("description2", "Description 2 (NADR goods only)"),
 )
 REMARKS = Field("text", "Remarks")
 
@@ -77,6 +80,8 @@ SOURCE_VALUES = (
     ("forwarder", "Forwarder", "text"),
     ("adr_nadr", "ADR / NADR", "text"),
     ("itos_no", "ITOS no.", "text"),
+    ("intris_no", "Intris no. (typed on the client page)", "text"),
+    ("product", "Product", "text"),
     ("bl_number", "BL / booking no.", "text"),
     ("carrier", "Carrier (as the source writes it)", "text"),
     ("carrier_code", "Carrier code (TMS shortcut)", "text"),

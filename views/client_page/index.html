@@ -48,8 +48,15 @@
       </div>
       <div class="toolbar-actions">
         <div class="counts" id="counts"></div>
+        <div class="cols-wrap">
+          <button type="button" class="btn btn-ghost" id="cols-btn" aria-haspopup="true" aria-expanded="false" title="Show or hide table columns">Columns</button>
+          <div class="cols-pop" id="cols-pop" hidden>
+            <div class="cols-head"><span>Show columns</span><button type="button" class="link-btn" id="cols-all">Show all</button></div>
+            <div class="cols-list" id="cols-list"></div>
+          </div>
+        </div>
         <button type="button" class="btn btn-ghost" id="sync-btn" title="Load the latest shipments of this client from the source">Sync</button>
-        <button type="button" class="btn btn-ghost" id="edit-btn" disabled title="Set the customer no. / trade lane of the selected shipments">Edit</button>
+        <button type="button" class="btn btn-ghost" id="edit-btn" disabled title="Set the Intris no. and the customer no. / trade lane of the selected shipments">Edit</button>
         <button type="button" class="btn btn-ghost" id="preview-btn" disabled title="See what Create would type into TMS for the selected shipments">Preview</button>
         <button type="button" class="btn btn-primary" id="create-btn" disabled>Create</button>
       </div>
@@ -64,6 +71,8 @@
             <th>Customer No</th>
             <th>Trade Lane</th>
             <th>ITOS</th>
+            <th>Intris No</th>
+            <th>Product</th>
             <th>Client Ref</th>
             <th>TMS Customer Ref</th>
             <th>Forwarder</th>
@@ -136,7 +145,7 @@
     <div class="attach-panel route-panel" role="dialog" aria-modal="true" aria-labelledby="route-title">
       <div class="attach-head">
         <div>
-          <div class="attach-title" id="route-title">Customer no. / trade lane</div>
+          <div class="attach-title" id="route-title">Edit shipments</div>
           <div class="attach-sub" id="route-sub"></div>
         </div>
         <button type="button" class="attach-close icon-btn" id="route-close" aria-label="Close">✕</button>

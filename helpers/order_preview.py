@@ -43,12 +43,26 @@ def _diff_columns(d: dict, containers: list) -> list[tuple[str, callable, str]]:
         ("Quantity", lambda c: c.get("quantity"), cargo.get("quantity")),
         ("Gross Weight", lambda c: c.get("grossWeight"), cargo.get("grossWeight")),
         ("Net Weight", lambda c: c.get("netWeight"), cargo.get("netWeight")),
+        ("ADR Description", lambda c: c.get("adrDescription"), cargo.get("adrDescription")),
+        ("Description 2", lambda c: c.get("description2"), cargo.get("description2")),
         ("Remarks", lambda c: c.get("remarks"), d.get("remarks")),
     ]
     s = lambda v: "" if v is None else str(v)
     # a column only when some container would really be corrected (an empty own value keeps the first order's)
+    clearable = {"ADR Description", "Description 2"}        # emptied on an order whose goods are the other kind
     return [(label, get, s(first)) for label, get, first in cols
-            if any(s(get(c)) and s(get(c)) != s(first) for c in containers)]
+            if any((s(get(c)) or label in clearable) and s(get(c)) != s(first) for c in containers)]
+
+
+_CLEARED = {"ADR Description", "Description 2"}         # empty on a copy = emptied there, not "as the first order"
+
+
+def _drawer_cell(label, own, first) -> dict:
+    """A copy's value: its own; empty = the first order's (kept), except a column the copy empties."""
+    own = "" if own is None else str(own)
+    if label in _CLEARED:
+        return {"value": own, "differs": own != first}
+    return {"value": own or first or "", "differs": bool(own) and own != first}
 
 
 def preview(session, client, shipment) -> dict:
@@ -79,8 +93,7 @@ def preview(session, client, shipment) -> dict:
             "columns": ["Container No.", "Seal No.", *[label for label, _g, _f in cols]],
             "rows": [{"cells": [{"value": c.get("containerNoText") or c["containerNo"], "differs": False},
                                 {"value": c.get("sealNo") or "", "differs": False},
-                                *[{"value": str(get(c) or first or ""),
-                                   "differs": bool(get(c)) and str(get(c)) != first} for _l, get, first in cols]]}
+                                *[_drawer_cell(label, get(c), first) for label, get, first in cols]]}
                      for c in containers],
         }
 
@@ -95,7 +108,8 @@ def preview(session, client, shipment) -> dict:
         "other_rows": ({"from": d["otherLines"].get("bookedFrom", ""), "until": d["otherLines"].get("bookedUntil", "")}
                        if d.get("otherLines") else None),
         "cargo": [{"good_no": c.get("goodNo"), "quantity": c.get("quantity"), "gross_weight": c.get("grossWeight"),
-                   "net_weight": c.get("netWeight")} for c in d["cargo"]],
+                   "net_weight": c.get("netWeight"), "adr_description": c.get("adrDescription"),
+                   "description2": c.get("description2")} for c in d["cargo"]],
         "remarks": d.get("remarks") or "",
         "per_container": per_container,
     }

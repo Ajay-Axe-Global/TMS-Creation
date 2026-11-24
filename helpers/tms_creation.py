@@ -122,6 +122,26 @@ def norm(s) -> str:
 # is therefore decided on the DATE (and the time, when we typed one), never on the text.
 _DT_RE = re.compile(r"(\d{1,4})\s*[/.\-]\s*(\d{1,2})\s*[/.\-]\s*(\d{1,4})(?:[\sT,]+(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)?)?", re.I)
 _DATE_COLUMNS = {"Booked DateTime From", "Booked DateTime Until", "Closing Date Time"}
+# typed with TMS's decimal separator: "24500.5" is "24500,5" where TMS writes 0,00 (else it reads 245005)
+_NUMBER_COLUMNS = {"Quantity", "Gross Weight", "Net Weight"}
+# Order Cargo text columns typed after the weights: (payload key, column caption, the cell's controlname)
+CARGO_TEXT = (("adrDescription", "ADR Description", "ADR Description"), ("description2", "Description 2", "Description2"))
+_COL_CONTROLS = {cap: cn for _k, cap, cn in CARGO_TEXT}
+
+# the decimal separator the grid shows (a cell like "0,00" or "12.50"); None when no such cell is visible
+_DEC_SEP_JS = r"""t => { for (const td of t.querySelectorAll('tbody td')) {
+    const i = td.querySelector('input:not([type=checkbox])'); const v = ((i ? i.value : td.innerText) || '').trim();
+    const m = /^-?\d+([.,])\d{2}$/.exec(v); if (m) return m[1]; } return null; }"""
+
+
+def _parse_num(text, sep):
+    """A number as TMS shows it ("245.005", "24.500,5", "24500,5") -> float, with `sep` the decimal separator."""
+    t = re.sub(r"[^\d,.\-]", "", text or "")
+    t = t.replace("." if sep == "," else ",", "").replace(sep, ".")
+    try:
+        return float(t)
+    except ValueError:
+        return None
 
 
 def _dt_parts(text):
@@ -785,7 +805,17 @@ class Creation:
         if not g:
             return -1
         heads = g.evaluate("t => [...t.querySelectorAll('thead tr:first-child th')].map(th => (th.getAttribute('abbr') || '').replace(/\\s+/g, ' ').trim().toLowerCase())")
-        return heads.index(norm(abbr)) if norm(abbr) in heads else -1
+        if norm(abbr) in heads:
+            return heads.index(norm(abbr))
+        cn = _COL_CONTROLS.get(abbr)                 # the caption differs: the column of the cells with this controlname
+        if cn:
+            try:
+                return g.evaluate("""(t, cn) => { for (const r of t.querySelectorAll('tbody tr[role=row]')) {
+                    const i = [...r.querySelectorAll('td')].findIndex(td => td.getAttribute('controlname') === cn);
+                    if (i >= 0) return i; } return -1; }""", cn)
+            except Exception:
+                return -1
+        return -1
 
     def rows(self, caption):
         g = self.grid(caption)
@@ -888,9 +918,36 @@ class Creation:
         self.close_date_picker()
         self.wait(settle)
 
+    def decimal_sep(self, caption):
+        """"," or "." — read once from the grid (TMS_DECIMAL_SEP when set, else what a cell like 0,00 shows; "," when
+        nothing tells)."""
+        if getattr(self, "_dec_sep", None):
+            return self._dec_sep
+        sep = os.getenv("TMS_DECIMAL_SEP", "").strip()
+        if sep not in (",", "."):
+            g = self.grid(caption)
+            try:
+                sep = g.evaluate(_DEC_SEP_JS) if g else None
+            except Exception:
+                sep = None
+            if sep is None:
+                return ","                                   # not cached: a later grid may tell
+        self._dec_sep = sep
+        logger.info("TMS decimal separator: %r", sep)
+        return sep
+
     def step(self, section, line, caption, key, abbr, value, *, lookup=False, settle=0.4, extra=None, check=None):
         if not value:
             return
+        number = None
+        if abbr in _NUMBER_COLUMNS:
+            sep = self.decimal_sep(caption)
+            try:
+                number = float(str(value).replace(",", "."))
+            except ValueError:
+                number = None
+            if number is not None:
+                value = str(value).replace(",", ".").replace(".", sep) if "." in str(value).replace(",", ".") else str(value)
         try:
             try:
                 self.commit_cell(caption, key, abbr, value, lookup=lookup, settle=settle)
@@ -907,6 +964,7 @@ class Creation:
             # order / clock than we typed it (see same_datetime)
             ok = (self.until(check, 2.0) if check
                   else same_datetime(value, now()) if abbr in _DATE_COLUMNS
+                  else abs((_parse_num(now(), self.decimal_sep(caption)) or 0) - number) < 0.0005 if number is not None
                   else clean(value) in clean(now()))
             self.L(section, Line=line, Field=abbr, Value=value, Actual=now(),
                    Extra=extra() if extra else "", Status="OK" if ok else "CHECK")
@@ -1239,7 +1297,39 @@ class Creation:
             return
         self.grid(cap).scroll_into_view_if_needed()
         self.wait(0.5)
+        good_i = self.col_idx(cap, "Good No.")
+
+        def filled_keys():
+            """Row keys of the lines the new order already has (a Good No. filled, e.g. G0001 from the trade lane)."""
+            keys = []
+            for r in self.rows(cap):
+                try:
+                    if "draft-line" in (r.get_attribute("class", timeout=READ_MS) or ""):
+                        continue
+                    if good_i >= 0 and norm(self.cell_text(r.locator("td").nth(good_i))):
+                        keys.append(r.get_attribute("rowkey", timeout=READ_MS))
+                except Exception:
+                    continue
+            return keys
+
+        existing = filled_keys()
+        if existing:
+            self.L("Cargo", Line="existing", Value=f"{len(existing)} line(s)",
+                   Status="OK — the order already has cargo line(s): ours overwrite them")
         for n, C in enumerate(cargo):
+            if n < len(existing):
+                # an existing line: each cell is emptied (+ Tab), then our value typed (+ Tab) — like the copies
+                key = existing[n]
+                val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
+                if C.get("goodNo"):
+                    self.replace_cell("Cargo", n + 1, cap, key, "Good No.", C.get("goodNo"), lookup=True,
+                                      extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
+                                      check=lambda v=val, g=C.get("goodNo"): norm(v("Good No.")) == norm(g))
+                for abbr, k in (("Quantity", "quantity"), ("Gross Weight", "grossWeight"), ("Net Weight", "netWeight"),
+                                *((cap_, k_) for k_, cap_, _cn in CARGO_TEXT)):
+                    if C.get(k):                     # net weight only when mapped: otherwise the cell is left alone
+                        self.replace_cell("Cargo", n + 1, cap, key, abbr, str(C.get(k)))
+                continue
             def empty_row():
                 i = self.col_idx(cap, "Good No.")
                 for r in self.rows(cap):
@@ -1259,6 +1349,11 @@ class Creation:
             self.step("Cargo", n + 1, cap, key, "Gross Weight", str(C.get("grossWeight") or ""))
             # only for clients whose mapping fills it; an empty value is skipped by step() and the cell left alone
             self.step("Cargo", n + 1, cap, key, "Net Weight", str(C.get("netWeight") or ""))
+            for k, col, _cn in CARGO_TEXT:           # ADR Description (ADR goods) / Description 2 (NADR goods)
+                self.step("Cargo", n + 1, cap, key, col, str(C.get(k) or ""))
+        if len(existing) > len(cargo):
+            self.L("Cargo", Line="existing", Value=f"{len(existing) - len(cargo)} line(s)",
+                   Status="CHECK — the order has more cargo lines than this shipment: the extra ones are left as they are")
         self.blur_active()
         self.wait(1.0)
 
@@ -1932,6 +2027,10 @@ class Creation:
                           ("netWeight", "netWeight")):
             if str(c.get(key) or "") != str(cargo.get(dkey) or "") and c.get(key):
                 changes[key] = str(c[key])
+        # ADR Description / Description 2: also emptied when this container's goods are the other kind ("" = clear)
+        for key, _col, _cn in CARGO_TEXT:
+            if str(c.get(key) or "") != str(cargo.get(key) or ""):
+                changes[key] = str(c.get(key) or "")
         return changes
 
     def clear_cell(self, caption, key, abbr):
@@ -2014,6 +2113,18 @@ class Creation:
                     self.replace_cell("Cargo", 1, cap, key, "Gross Weight", changes["grossWeight"])
                 if "netWeight" in changes:
                     self.replace_cell("Cargo", 1, cap, key, "Net Weight", changes["netWeight"])
+                for k, col, _cn in CARGO_TEXT:
+                    if k not in changes:
+                        continue
+                    if changes[k]:
+                        self.replace_cell("Cargo", 1, cap, key, col, changes[k])
+                    else:                            # the first order's value does not belong on this one
+                        try:
+                            self.clear_cell(cap, key, col)
+                            self.L("Cargo", Line=1, Field=col, Value="", Actual=self.cell_text(self.cell(cap, key, col)),
+                                   Status="OK — emptied (not this goods kind)")
+                        except Exception as e:
+                            self.L("Cargo", Line=1, Field=col, Status="ERROR clearing: " + str(e).splitlines()[0])
         if "remarks" in changes:
             self.set_remarks(changes["remarks"])
         self.close_date_picker()
