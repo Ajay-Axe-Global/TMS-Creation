@@ -47,7 +47,8 @@ Nothing in `helpers/` is per client. A **published mapping wins**; otherwise `cl
 |---|---|
 | Month view | Only the selected ATA month is loaded (current month by default; a shipment without ATA counts as this month). Another month / year or **ALL** is fetched when picked. A search looks in every month |
 | Sync | Loads this client's latest shipments from the source |
-| **Edit** | Sets the **customer no. / trade lane** of the selected shipments: pick one of the client's pairs from Admin, or **Type another**. Saved on the shipment (`shipments.route_*`), wins over the Admin rule, never overwritten by a sync. Marked ✎ in the table; **Reset to rule** clears it. Only for shipments not queued / created; every change is in the audit log |
+| **Columns** | Each user hides the columns a client doesn't use (remembered in that browser, per client); **Show all** brings them back |
+| **Edit** | Sets the **Intris no.** (column after ITOS) and/or the **customer no. / trade lane** of the selected shipments: pick one of the client's pairs from Admin, or **Type another**. Saved on the shipment (`shipments.route_*`), wins over the Admin rule, never overwritten by a sync. Marked ✎ in the table; **Reset to rule** clears it. **Keep as it is** changes only the Intris no. Both are mapping values too (`intris_no`; `product` is reserved for later). Only for shipments not queued / created; every change is in the audit log |
 | **Preview** | Read-only: shows exactly what Create would type (General, Lines, Goods, Remarks). With several containers, a drawer lists each container and the values that differ from the first order |
 | Create | Queues one job per shipment. Shipments with a problem (no trade lane, unknown goods …) are skipped with the reason |
 | Attach | Documents per type (ANDER, CUSTOMS, DN) are uploaded to the order |
@@ -63,7 +64,12 @@ Who can use it: admins on every client, users only on clients granted to them (A
 3. **Lines** — Depot Out / Depot In: address no., Order Line Ref 1, booked from / until, closing check. Other rows get
    their booked dates. The **UNLOAD WH** row gets the order's container no. in its *Container No.* column. A depot name
    not in Admin > Addresses uses the **default address 75121** (`DEFAULT_DEPOT_ADDRESS_NO`), noted in the log.
-4. **Order Cargo** — goods code, quantity, gross weight, and **net weight only if mapped** (column caption "Net Weight").
+4. **Order Cargo** — a cargo line the new order already has (e.g. `G0001 General cargo` from the trade lane) is
+   overwritten (each cell emptied + Tab, then our value); otherwise the empty line is used: goods code, quantity, gross weight, and **net weight only if mapped** (column caption "Net Weight").
+   **ADR / NADR:** by the container's ADR / NADR value, ADR goods get **ADR Description**, NADR goods **Description 2**
+   (the other stays empty). The value is the mapping's (Goods: *ADR Description* / *Description 2*), or the
+   container's **product** when not mapped. A copy whose container has another product or kind is corrected (the
+   column that doesn't apply is emptied).
 5. **Remarks**, revenues, then **Copy Order** for the other containers. Each copy gets its own container no. / seal and
    is corrected where its container differs (customer ref, depot address / ref / dates, goods, quantity, weights,
    remarks, UNLOAD WH container no.).
@@ -191,6 +197,7 @@ Never run `database/seed_sample.py` on production (it is sample data and deletes
 | `TMS_BROWSERS`, `TMS_SLOTS` | Browsers in the pool × job slots each (default 3 × 3 = 9 jobs at once) |
 | `TMS_COPY_WAIT` | Seconds to wait for TMS to finish the copies after OK in Copy Order (default 180) |
 | `TMS_DATE_FORMAT` | How TMS reads dates (`dmy` = day/month/year; default month/day/year) |
+| `TMS_DECIMAL_SEP` | `,` or `.`: how quantities / weights are typed (`24500,5`). Empty = read from the cargo grid (a cell like `0,00`), else `,` |
 | `DEFAULT_DEPOT_ADDRESS_NO` | Address no. used for a depot not in Admin > Addresses (default `75121`) |
 | `JWT_SECRET`, `CREDENTIALS_KEY` | Login tokens and the encryption of stored TMS passwords — keep them secret and unchanged |
 

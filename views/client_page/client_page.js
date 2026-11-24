@@ -222,6 +222,8 @@
           ${routeCell("Customer No", s.customer_no, s.route_customer_own, s)}
           ${routeCell("Trade Lane", s.tradelane_no, s.route_lane_own, s)}
           ${cell("ITOS", s.itos_no, "mono ship")}
+          ${cell("Intris No", s.intris_no, "mono ship nowrap")}
+          ${cell("Product", per(c, s, "product"), cls(c, "product", "nowrap"))}
           ${cell("Client Ref", per(c, s, "client_ref"), cls(c, "client_ref", ""))}
           ${cell("TMS Customer Ref", per(c, s, "tms_customer_ref"), cls(c, "tms_customer_ref", "nowrap"))}
           ${cell("Forwarder", per(c, s, "forwarder"), cls(c, "forwarder", "nowrap"))}
@@ -532,7 +534,9 @@
     if (p.other_rows) lines.push(['<span class="pv-rowname">ALL OTHER ROWS</span>', "", "",
       pvVal(p.other_rows.from), pvVal(p.other_rows.until)]);
     const netCol = p.cargo.some(c => c.net_weight);              // Net Weight only when the mapping fills it
-    const cargo = (p.cargo.length ? p.cargo : [{}]).map(c => [pvVal(c.good_no), pvVal(c.quantity), pvVal(c.gross_weight), ...(netCol ? [pvVal(c.net_weight)] : [])]);
+    const adrCol = p.cargo.some(c => c.adr_description), d2Col = p.cargo.some(c => c.description2);   // ADR / NADR goods
+    const cargo = (p.cargo.length ? p.cargo : [{}]).map(c => [pvVal(c.good_no), pvVal(c.quantity), pvVal(c.gross_weight),
+      ...(netCol ? [pvVal(c.net_weight)] : []), ...(adrCol ? [pvVal(c.adr_description)] : []), ...(d2Col ? [pvVal(c.description2)] : [])]);
     // several containers: a drawer after Goods with every container's own no. / seal and whatever differs
     const pc = p.per_container;
     const drawer = pc ? `<details class="pv-drawer">
@@ -553,14 +557,16 @@
         ${pvTable("General", p.general.map(g => pvRow(g.label, g.value && g.value.startsWith("per container")
           ? `<span class="pv-per">${esc(g.value)}</span>` : pvVal(g.value))))}
         <div>${pvGrid("Lines", ["Action", "Address No.", "Order Line Ref 1", "Booked From", "Booked Until"], lines)}
-          ${pvGrid("Goods", ["Good No.", "Quantity", "Gross Weight", ...(netCol ? ["Net Weight"] : [])], cargo)}
+          ${pvGrid("Goods", ["Good No.", "Quantity", "Gross Weight", ...(netCol ? ["Net Weight"] : []),
+            ...(adrCol ? ["ADR Description"] : []), ...(d2Col ? ["Description 2"] : [])], cargo)}
           ${pvTable("Remarks", [pvRow("Remarks", pvVal(p.remarks))])}</div>
       </div>
       ${drawer}
     </section>`;
   }
   // ── Edit: customer no. / trade lane of the selected shipments ──
-  const OTHER = "__other";
+  const OTHER = "__other", KEEP = "__keep";
+  let intrisStart = "";                // the Intris no. the Edit dialog opened with (sent only when changed)
   function closeRoute() { $("route-overlay").classList.remove("open"); }
   const routeTargets = () => shipments.filter(s => selected.has(s.id));
   function openRoute() {
@@ -572,19 +578,29 @@
     const curC = same("customer_no") ? first.customer_no || "" : "";
     const curL = same("tradelane_no") ? first.tradelane_no || "" : "";
     const known = laneChoices.findIndex(p => p.customer_no === curC && p.tradelane_no === curL);
+    const sameIntris = same("intris_no");
+    intrisStart = sameIntris ? first.intris_no || "" : "";
     $("route-sub").textContent = `${picked.length} shipment${picked.length === 1 ? "" : "s"} selected` +
       (editable.length < picked.length ? ` — ${picked.length - editable.length} already queued or created, left as they are` : "") +
-      ". Saved on the shipment: Preview and Create use it instead of the Admin rule.";
+      ". Saved on the shipment, never overwritten by a sync.";
     notice($("route-error"), "", "");
     $("route-body").innerHTML = `
+      <div class="route-typed route-intris">
+        <label>Intris no.<input type="text" id="route-intris" maxlength="120" class="mono" autocomplete="off"
+          value="${esc(intrisStart)}" placeholder="${sameIntris ? "" : "different values: leave empty to keep them"}" /></label>
+      </div>
+      <div class="route-sec">Customer no. / trade lane <small>Preview and Create use it instead of the Admin rule</small></div>
       <div class="route-list">
+        <label class="route-opt route-keep">
+          <input type="radio" name="route-pick" value="${KEEP}" checked />
+          <span>Keep as it is</span><small>${esc(same("customer_no") && same("tradelane_no") ? `${curC || "—"} / ${curL || "—"}` : "different values")}</small></label>
         ${laneChoices.map((p, i) => `<label class="route-opt">
-          <input type="radio" name="route-pick" value="${i}" ${i === known ? "checked" : ""} />
+          <input type="radio" name="route-pick" value="${i}" />
           <span class="mono">${esc(p.customer_no || "—")}</span><span class="mono">${esc(p.tradelane_no)}</span>
           <small>${esc(p.rule)}</small></label>`).join("") ||
           '<div class="pv-none">No customer no. / trade lane is set up for this client in Admin yet — type one below.</div>'}
         <label class="route-opt route-other">
-          <input type="radio" name="route-pick" value="${OTHER}" ${known < 0 ? "checked" : ""} />
+          <input type="radio" name="route-pick" value="${OTHER}" />
           <span>Type another</span><small>a pair that is not in the list</small></label>
       </div>
       <div class="route-typed" id="route-typed">
@@ -609,20 +625,26 @@
     const ids = routeTargets().filter(s => s.selectable).map(s => s.id);
     let body = { shipment_ids: ids, reset: true };
     if (!reset) {
+      body = { shipment_ids: ids };
+      const intris = $("route-intris").value.trim();
+      if (intris !== intrisStart) body.intris_no = intris;
       const pick = ($("route-body").querySelector('input[name="route-pick"]:checked') || {}).value;
-      if (pick === undefined) { notice($("route-error"), "err", "Pick a pair, or type another."); return; }
-      const p = pick === OTHER
-        ? { customer_no: $("route-customer").value.trim(), tradelane_no: $("route-lane").value.trim() }
-        : laneChoices[+pick];
-      if (!p.tradelane_no) { notice($("route-error"), "err", "The trade lane is needed."); return; }
-      body = { shipment_ids: ids, customer_no: p.customer_no, tradelane_no: p.tradelane_no };
+      if (pick !== undefined && pick !== KEEP) {
+        const p = pick === OTHER
+          ? { customer_no: $("route-customer").value.trim(), tradelane_no: $("route-lane").value.trim() }
+          : laneChoices[+pick];
+        if (!p.tradelane_no) { notice($("route-error"), "err", "The trade lane is needed."); return; }
+        body.customer_no = p.customer_no;
+        body.tradelane_no = p.tradelane_no;
+      }
+      if (!("intris_no" in body) && !("tradelane_no" in body)) { closeRoute(); return; }      // nothing changed
     }
     $("route-save").disabled = $("route-reset").disabled = true;
     try {
       const r = await api(`${base}/route`, { method: "POST", body });
       closeRoute();
       notice($("notice"), "ok", reset ? `${r.changed} shipment(s) back to the Admin rule.`
-        : `Customer no. / trade lane saved on ${r.changed} shipment(s). Check with Preview, then Create.`);
+        : `Saved on ${r.changed} shipment(s).` + ("tradelane_no" in body ? " Check with Preview, then Create." : ""));
       await refresh();
     } catch (e) {
       notice($("route-error"), "err", esc(e.message));
@@ -630,6 +652,40 @@
       $("route-reset").disabled = false;
     }
   }
+  // ── Columns: a user hides the columns this client doesn't use (kept in this browser, per client) ──
+  const COLS_KEY = `${flowSlug}-hidden-cols:${clientSlug}`;
+  const hiddenCols = new Set((() => { try { return JSON.parse(localStorage.getItem(COLS_KEY) || "[]"); } catch { return []; } })());
+  const colStyle = document.head.appendChild(document.createElement("style"));
+  const colHeads = [...document.querySelectorAll(".tracking-table thead th")].slice(1);     // not the select box
+  colHeads.forEach(th => { th.dataset.col = th.textContent.trim(); });
+  function applyCols() {
+    const q = v => JSON.stringify(v);
+    colStyle.textContent = [...hiddenCols].map(c =>
+      `.tracking-table th[data-col=${q(c)}], .tracking-table td[data-label=${q(c)}] { display: none; }`).join("\n");
+    try { localStorage.setItem(COLS_KEY, JSON.stringify([...hiddenCols])); } catch { /* private mode */ }
+    $("cols-btn").textContent = hiddenCols.size ? `Columns (${hiddenCols.size} hidden)` : "Columns";
+  }
+  function renderCols() {
+    $("cols-list").innerHTML = colHeads.map(th => `<label class="cols-opt">
+      <input type="checkbox" data-col="${esc(th.dataset.col)}" ${hiddenCols.has(th.dataset.col) ? "" : "checked"} />
+      <span>${esc(th.dataset.col)}</span></label>`).join("");
+    $("cols-list").querySelectorAll("input").forEach(i => i.addEventListener("change", () => {
+      if (i.checked) hiddenCols.delete(i.dataset.col); else hiddenCols.add(i.dataset.col);
+      applyCols();
+    }));
+  }
+  function toggleCols(open) {
+    $("cols-pop").hidden = !open;
+    $("cols-btn").setAttribute("aria-expanded", String(open));
+    if (open) renderCols();
+  }
+  $("cols-btn").addEventListener("click", e => { e.stopPropagation(); toggleCols($("cols-pop").hidden); });
+  $("cols-all").addEventListener("click", () => { hiddenCols.clear(); applyCols(); renderCols(); });
+  document.addEventListener("click", e => { if (!$("cols-pop").hidden && !e.target.closest(".cols-wrap")) toggleCols(false); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") toggleCols(false); });
+  for (const c of [...hiddenCols]) if (!colHeads.some(th => th.dataset.col === c)) hiddenCols.delete(c);   // a renamed column
+  applyCols();
+
   $("edit-btn").addEventListener("click", openRoute);
   $("route-close").addEventListener("click", closeRoute);
   $("route-cancel").addEventListener("click", closeRoute);

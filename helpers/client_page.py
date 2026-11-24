@@ -56,7 +56,7 @@ def lane_choices(client) -> list[dict]:
 # What the page shows per container, because the source may give each container of a BL its own: a container's own
 # value, else the shipment's (and `own` lists the ones that are really its own)
 PER_CONTAINER_VIEW = ("client_ref", "tms_customer_ref", "forwarder", "carrier", "vessel_name", "depot_out_from", "vgm_closing_date", "depot_out_reference",
-                      "depot_out_date", "depot_in_date", "remarks")
+                      "depot_out_date", "depot_in_date", "remarks", "product")
 
 
 def _container_values(c, s) -> dict:
@@ -214,6 +214,8 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                 "shipments": [{
                     "id": s.id,
                     "itos_no": s.itos_no,
+                    "intris_no": s.intris_no,
+                    "product": s.product,
                     "client_ref": s.client_ref,
                     "tms_customer_ref": s.tms_customer_ref,
                     "forwarder": s.forwarder,
@@ -317,7 +319,8 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
     @client_access_required()
     def set_route(client_slug):
         """Edit: {"shipment_ids": [...], "customer_no", "tradelane_no"} saves them on those shipments (they then win over
-        the lane rules); {"shipment_ids": [...], "reset": true} goes back to the rules. Queued / created ones are left."""
+        the lane rules); {"shipment_ids": [...], "reset": true} goes back to the rules. "intris_no" (optional, "" clears)
+        sets the Intris no. — with or without a route change. Queued / created ones are left."""
         body = request.get_json(silent=True) or {}
         ids = body.get("shipment_ids")
         if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
@@ -325,7 +328,14 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
         reset = body.get("reset") is True
         customer = str(body.get("customer_no") or "").strip().upper()
         lane = str(body.get("tradelane_no") or "").strip().upper()
-        if not reset:
+        do_route = reset or "customer_no" in body or "tradelane_no" in body
+        do_intris = "intris_no" in body
+        intris = str(body.get("intris_no") or "").strip()
+        if not do_route and not do_intris:
+            return jsonify({"error": "Nothing to save."}), 400
+        if len(intris) > 120:
+            return jsonify({"error": "The Intris no. is longer than 120 characters."}), 400
+        if do_route and not reset:
             if not customer and not lane:
                 return jsonify({"error": "Give a customer no. and/or a trade lane, or reset to the rule."}), 400
             for label, v in (("Customer no.", customer), ("Trade lane", lane)):
@@ -342,15 +352,23 @@ def make_blueprint(flow_slug: str | None = None) -> Blueprint:
                 if s.tms_status not in jobs.QUEUEABLE:
                     locked.append(s.itos_no or s.bl_number)
                     continue
-                s.route_customer_no = None if reset else (customer or None)
-                s.route_tradelane_no = None if reset else (lane or None)
-                s.route_set_by = None if reset else g.user.get("username")
-                s.route_set_at = None if reset else datetime.datetime.utcnow()
+                if do_route:
+                    s.route_customer_no = None if reset else (customer or None)
+                    s.route_tradelane_no = None if reset else (lane or None)
+                    s.route_set_by = None if reset else g.user.get("username")
+                    s.route_set_at = None if reset else datetime.datetime.utcnow()
+                if do_intris:
+                    s.intris_no = intris or None
                 changed.append(s.itos_no or s.bl_number)
             if changed:
-                audit(session, g.user["user_id"], "route_reset" if reset else "route_set", client.name,
-                      ("back to the rule" if reset else f"customer {customer or '(rule)'}, lane {lane or '(rule)'}")
-                      + f" — {len(changed)} shipment(s): " + ", ".join(map(str, changed[:20])))
+                which = ", ".join(map(str, changed[:20]))
+                if do_route:
+                    audit(session, g.user["user_id"], "route_reset" if reset else "route_set", client.name,
+                          ("back to the rule" if reset else f"customer {customer or '(rule)'}, lane {lane or '(rule)'}")
+                          + f" — {len(changed)} shipment(s): {which}")
+                if do_intris:
+                    audit(session, g.user["user_id"], "intris_set", client.name,
+                          f"Intris no. {intris or '(cleared)'} — {len(changed)} shipment(s): {which}")
             session.commit()
             return jsonify({"changed": len(changed), "locked": locked})
         finally:

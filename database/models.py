@@ -286,6 +286,10 @@ class Shipment(Base):
     route_set_by = Column(String(120), nullable=True)       # who set them (username), for the page
     route_set_at = Column(DateTime, nullable=True)
 
+    # Typed by a user on the client page (Edit), never written by a source sync
+    intris_no = Column(String(120), nullable=True)          # the Intris number, shown after ITOS
+    product = Column(String(120), nullable=True)            # reserved: what fills it is decided later
+
     # TMS result — written by the job runner, never by a source sync
     # "not_started" | "queued" | "running" | "done" | "failed" | "needs_relogin"
     tms_status = Column(String(20), nullable=False, default="not_started")
@@ -341,6 +345,8 @@ class ShipmentContainer(Base):
     country_of_origin = Column(String(10), nullable=True)
     country_of_destination = Column(String(10), nullable=True)
     closing_date = Column(Date, nullable=True)
+    product = Column(String(120), nullable=True)            # this container's own product (Order Cargo ADR Description /
+                                                            # Description 2); empty = the shipment's. Never synced.
     depot_out_from = Column(Date, nullable=True)          # the ATA
     vgm_closing_date = Column(Date, nullable=True)
     depot_out_date = Column(Date, nullable=True)          # Out Booked

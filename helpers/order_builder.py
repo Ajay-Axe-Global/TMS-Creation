@@ -26,6 +26,8 @@ many, which depot is on which line, and what each copied order must be corrected
     check_payload(payload, flow) -> [reasons]   asked when the user clicks Create, BEFORE anything is queued
     create_order(page, frame, payload, log, flow)   called by the worker with the empty new-order card open
 """
+import re
+
 from engine import catalog
 from helpers import goods as goods_svc
 from helpers import tms_creation
@@ -41,7 +43,13 @@ LINE_ACTIONS = ("DEPOT OUT", "UNLOAD", "DEPOT IN")              # the Lines rows
 OTHER_LINES = "OTHERS"        # every Lines row that is not DEPOT OUT / DEPOT IN (TMS may generate any number of them,
                               # even with the same action code twice): lines(v) gives them only booked dates
 LINE_VALUES = {"ref", "bookedFrom", "bookedUntil"}
-CARGO_VALUES = {"goodNo", "quantity", "grossWeight", "netWeight"}
+CARGO_VALUES = {"goodNo", "quantity", "grossWeight", "netWeight", "adrDescription", "description2"}
+
+
+def goods_kind(adr_nadr) -> str:
+    """"ADR" | "NADR" | "" from the source's adr_nadr ("NADR", "Non-ADR", "adr" ...)."""
+    t = re.sub(r"[^A-Z]", "", str(adr_nadr or "").upper())
+    return "ADR" if t == "ADR" else "NADR" if t in ("NADR", "NONADR") else ""
 DEFAULT_SAME_FOR_ALL = ("container_type",)                      # the flow copies the first order, so the type is shared
 VALUE_NAMES = catalog.FLAT_VALUE_NAMES                          # the plain values every container carries
 
@@ -153,6 +161,15 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
     def cargo_of(c) -> dict:
         return spec.cargo(view(c)) if spec.cargo else {}
 
+    def descriptions(c, cg) -> dict:
+        """ADR goods: the ADR Description column; NADR goods: Description 2. The value is what the mapping says,
+        the container's product when the mapping doesn't map it; the other column stays empty."""
+        own = lambda k: c.get(k) if c.get(k) is not None else s.get(k)          # noqa: E731
+        kind, product = goods_kind(own("adr_nadr")), _text(own("product"))
+        pick = lambda k: _text(cg[k]) if k in cg else product                   # noqa: E731
+        return {"adrDescription": pick("adrDescription") if kind == "ADR" else "",
+                "description2": pick("description2") if kind == "NADR" else ""}
+
     def remarks_of(c) -> str:
         return _text(spec.remarks(view(c))) if spec.remarks else ""
 
@@ -202,7 +219,7 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
     cg = cargo_of(first)
     data["cargo"] = ([{"goodNo": cg["goodNo"], "quantity": cg.get("quantity") or "",
                        "grossWeight": cg.get("grossWeight") or "",
-                       "netWeight": cg.get("netWeight") or ""}] if cg.get("goodNo") else [])
+                       "netWeight": cg.get("netWeight") or "", **descriptions(first, cg)}] if cg.get("goodNo") else [])
 
     # ── Order Remarks: one line (the first container's remarks; a container whose own differ is corrected later) ──
     data["remarks"] = remarks_of(first)
@@ -231,7 +248,8 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
                 "depotOutNo": out_no, "depotOutRef": out_ref, "depotOutDate": out_booked,
                 "depotInNo": in_no, "depotInRef": in_ref, "depotInDate": in_booked,
                 "goodNo": _text(cg.get("goodNo")), "quantity": cg.get("quantity") or "",
-                "grossWeight": cg.get("grossWeight") or "", "netWeight": cg.get("netWeight") or ""}
+                "grossWeight": cg.get("grossWeight") or "", "netWeight": cg.get("netWeight") or "",
+                **descriptions(c, cg)}
 
     return {"data": data, "containers": [container(c) for c in containers], "calcRevenues": True}
 
