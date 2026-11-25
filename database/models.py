@@ -346,7 +346,7 @@ class ShipmentContainer(Base):
     country_of_destination = Column(String(10), nullable=True)
     closing_date = Column(Date, nullable=True)
     product = Column(String(120), nullable=True)            # this container's own product (Order Cargo ADR Description /
-                                                            # Description 2); empty = the shipment's. Never synced.
+                                                            # Description 2); empty = the shipment's. From the source.
     depot_out_from = Column(Date, nullable=True)          # the ATA
     vgm_closing_date = Column(Date, nullable=True)
     depot_out_date = Column(Date, nullable=True)          # Out Booked

@@ -13,7 +13,7 @@ Source column -> our column
                                       so nothing else is transferred. No client is ever created here.
     bl_number                      -> Shipment.bl_number (the group key)           itos_no -> Shipment.itos_no
     client_ref, carrier, vessel_name, country_of_origin, country_of_destination, closing_date,
-    tms_customer_ref, forwarder, adr_nadr -> same name
+    tms_customer_ref, forwarder, adr_nadr, product -> same name (product: a container whose product differs keeps its own)
     ata_date                       -> Shipment.depot_out_from
     pick_up_until                  -> Shipment.vgm_closing_date
     Every value below can differ between the containers of a BL (the source says it per row): the shipment keeps the
@@ -56,7 +56,7 @@ COLUMNS = ["client_name", "warehouse", "itos_no", "count", "container_no", "cont
            "gross_weight", "client_ref", "bl_number", "carrier", "vessel_name", "country_of_origin",
            "country_of_destination", "pick_up_from", "pick_up_until", "closing_date", "depot_out_address",
            "pickup_quay", "empty_return_reference", "depot_in_address", "ata_date", "tms_customer_ref",
-           "forwarder", "adr_nadr", "net_weight"]
+           "forwarder", "adr_nadr", "net_weight", "product"]
 
 # shipment column <- source column (the same value on every row of a BL; the first non-empty one wins)
 SHIPMENT_MAP = {
@@ -66,7 +66,7 @@ SHIPMENT_MAP = {
     "depot_out_date": "pick_up_from", "depot_in_date": "pick_up_from",
     "depot_in_reference": "empty_return_reference", "depot_out_address": "depot_out_address",
     "depot_in_address": "depot_in_address", "tms_customer_ref": "tms_customer_ref",
-    "forwarder": "forwarder", "adr_nadr": "adr_nadr",
+    "forwarder": "forwarder", "adr_nadr": "adr_nadr", "product": "product",
 }
 CONTAINER_FIELDS = ["container_type", "seal_no", "goods", "qty", "gross_weight", "net_weight"]
 WEIGHTS = ("qty", "gross_weight", "net_weight")       # numbers; a container on several rows adds them together

@@ -528,9 +528,11 @@
     // Lines and Goods: one column per TMS field, like the grids in TMS
     // nothing to fill still shows the fields, each value "empty"
     const srcLines = p.lines.length ? p.lines : [{ row: "DEPOT OUT" }, { row: "DEPOT IN" }];
-    const lines = srcLines.map(l => [`<span class="pv-rowname">${esc(l.row)}</span>`,
-      `<b>${pvVal(l.address_no)}</b>${l.note ? `<div class="pv-note">${esc(l.note)}</div>` : ""}`,
-      pvVal(l.ref), pvVal(l.booked_from), pvVal(l.booked_until)]);
+    const lines = srcLines.map(l => l.ref_only          // UNLOAD WH: only its Order Line Ref 1 (Unload Ref) is typed
+      ? [`<span class="pv-rowname">${esc(l.row)}</span>`, "", pvVal(l.ref), "", ""]
+      : [`<span class="pv-rowname">${esc(l.row)}</span>`,
+         `<b>${pvVal(l.address_no)}</b>${l.note ? `<div class="pv-note">${esc(l.note)}</div>` : ""}`,
+         pvVal(l.ref), pvVal(l.booked_from), pvVal(l.booked_until)]);
     if (p.other_rows) lines.push(['<span class="pv-rowname">ALL OTHER ROWS</span>', "", "",
       pvVal(p.other_rows.from), pvVal(p.other_rows.until)]);
     const netCol = p.cargo.some(c => c.net_weight);              // Net Weight only when the mapping fills it

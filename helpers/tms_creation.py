@@ -127,6 +127,39 @@ _NUMBER_COLUMNS = {"Quantity", "Gross Weight", "Net Weight"}
 # Order Cargo text columns typed after the weights: (payload key, column caption, the cell's controlname)
 CARGO_TEXT = (("adrDescription", "ADR Description", "ADR Description"), ("description2", "Description 2", "Description2"))
 _COL_CONTROLS = {cap: cn for _k, cap, cn in CARGO_TEXT}
+# Order Cargo cells are filled inside the page (no mouse click: a click makes BC scroll the grid to the cell and the
+# click then misses it). caption -> the cell's controlname
+_CARGO_CONTROLS = {"Good No.": "GoodNo", "Quantity": "Quantity", "Gross Weight": "GrossWeight",
+                   "Net Weight": "NetWeight", **_COL_CONTROLS}
+
+# the row (by rowkey, else the current one) -> the input of the cell with this controlname (or column index); when the
+# row has no input there yet, the cell is clicked in the page (makes the row current) and null is returned
+_CARGO_INPUT_JS = r"""(t, [key, cn, idx, click]) => {
+    const row = t.querySelector(`tbody tr[rowkey="${key}"]`) || t.querySelector('tbody tr.real-current');
+    if (!row) return null;
+    const tds = [...row.querySelectorAll('td')];
+    const td = tds.find(d => d.getAttribute('controlname') === cn) || (idx >= 0 ? tds[idx] : null);
+    if (!td) return null;
+    const inp = row.classList.contains('real-current') ? td.querySelector('input:not([type=checkbox])') : null;
+    if (inp && !inp.disabled && !inp.readOnly) return true;
+    if (click) (td.querySelector('span, a') || td).click();
+    return false; }"""
+
+# set the value like a person typing it, then Tab out so BC validates it (the worked browser-console snippet)
+_CARGO_FILL_JS = r"""(t, [key, cn, idx, value]) => {
+    const row = t.querySelector(`tbody tr[rowkey="${key}"]`) || t.querySelector('tbody tr.real-current');
+    const tds = [...row.querySelectorAll('td')];
+    const td = tds.find(d => d.getAttribute('controlname') === cn) || tds[idx];
+    const input = td.querySelector('input:not([type=checkbox])');
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    input.focus(); if (input.select) input.select();
+    set.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const tab = { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true };
+    input.dispatchEvent(new KeyboardEvent('keydown', tab));
+    input.dispatchEvent(new KeyboardEvent('keyup', tab));
+    input.blur(); return true; }"""
 
 # the decimal separator the grid shows (a cell like "0,00" or "12.50"); None when no such cell is visible
 _DEC_SEP_JS = r"""t => { for (const td of t.querySelectorAll('tbody td')) {
@@ -612,8 +645,7 @@ class Creation:
             # The click that picks the lane can succeed and the pop-up still take several seconds to close (a slow
             # machine): a second click on a link that is already going away must never be waited for or fail the run.
             try:
-                a.scroll_into_view_if_needed(timeout=2000)
-                a.click(timeout=3000)
+                a.evaluate("e => e.click()")             # in the page: no scrolling, never lands on another row
             except Exception:
                 pass
             closed = bool(self.until(popup_gone, 10.0))
@@ -625,13 +657,15 @@ class Creation:
                 cell = r.locator("td[role=gridcell] span.stringcontrol-read").first
                 try:
                     if cell.count():
-                        cell.click(timeout=3000)
+                        cell.evaluate("e => e.click()")
                 except Exception:
                     pass
                 self.until(lambda: selected(row()), 3.0)
                 self.wait(0.8)
             d = self.tradelane_dialog()
             ok = None
+            if d and not selected(row()):
+                raise _Stop(f"Trade lane {lane} could not be selected in the pop-up — not confirming another lane")
             if d:
                 ok = d.locator(".ms-nav-actionbar-container button.highlight-btn").first
                 if not ok.count():
@@ -645,7 +679,7 @@ class Creation:
         if not closed:
             r = row()
             try:
-                if r:
+                if r and selected(r):
                     r.locator("td[role=gridcell] span.stringcontrol-read").first.dblclick(timeout=3000)
             except Exception:
                 pass
@@ -666,9 +700,21 @@ class Creation:
                 pass
             return norm(lane) in norm(txt)
 
-        self.L("General", Field="Trade Lane No.", Value=lane, Status="OK" if self.until(shown_lane, 8.0) else "CHECK")
-        self.wait(1.2)
-        self.announce_first_order()
+        if self.until(shown_lane, 8.0):
+            self.L("General", Field="Trade Lane No.", Value=lane, Status="OK")
+            self.wait(1.2)
+            self.announce_first_order()
+            return
+        c = self.container("TradeLaneNo")
+        try:
+            got = (c.locator("input").first.input_value(timeout=READ_MS) if c and c.locator("input").count()
+                   else (c.inner_text(timeout=READ_MS) if c else "")).strip()
+        except Exception:
+            got = ""
+        self.L("General", Field="Trade Lane No.", Value=lane, Actual=got, Status="WRONG")
+        self.announce_first_order()                          # the number is kept, so the order can be found in TMS
+        raise _Stop(f"Trade lane is '{got or 'empty'}' instead of {lane} — stopped before filling the order; "
+                    "correct or delete it in TMS")
 
     def announce_first_order(self):
         """The customer + trade lane are chosen, so BC has created the order and shows its number in the header.
@@ -1044,7 +1090,7 @@ class Creation:
         if self.containers:                                  # 6. UNLOAD WH carries the order's container no.
             first = self.containers[0]
             try:
-                self.unload_wh_container(first.get("containerNoText") or first["containerNo"])
+                self.unload_wh_container(first.get("containerNoText") or first["containerNo"], self.data.get("unloadWhRef"))
             except FlowFailed:
                 raise
             except Exception as e:
@@ -1124,11 +1170,12 @@ class Creation:
                 found.append((r.get_attribute("rowkey", timeout=READ_MS), action))
         return found
 
-    def unload_wh_container(self, container_no):
+    def unload_wh_container(self, container_no, ref=None):
         """The UNLOAD WH row (the warehouse line between Drop Off and Pick Up) takes the order's own container no. in
-        its Container No. column. Done only when the trade lane has that row; a copy is corrected to its container."""
+        its Container No. column. Done only when the trade lane has that row; a copy is corrected to its container.
+        `ref` (the Unload Ref, when the client maps it; None = not mapped, left alone) goes in its Order Line Ref 1."""
         cap = "Lines"
-        if not container_no or not self.ensure_pane("Lines", lambda: self.grid(cap)):
+        if not (container_no or ref is not None) or not self.ensure_pane("Lines", lambda: self.grid(cap)):
             return
         def find():
             i = self.col_idx(cap, "Action Code")
@@ -1137,6 +1184,10 @@ class Creation:
         if not row:
             return                                           # this trade lane has no UNLOAD WH row
         key = row.get_attribute("rowkey", timeout=READ_MS)
+        if ref is not None:                                  # Order Line Ref 1 is left of Container No.: first
+            self.unload_wh_ref(cap, key, ref)
+        if not container_no:
+            return
         if self.col_idx(cap, "Container No.") < 0:
             self.L("Lines", Line="UNLOAD WH", Field="Container No.", Value=container_no, Status="COLUMN NOT FOUND")
             return
@@ -1149,6 +1200,32 @@ class Creation:
             self.replace_cell("Lines", "UNLOAD WH", cap, key, "Container No.", container_no)
         else:
             self.step("Lines", "UNLOAD WH", cap, key, "Container No.", container_no, settle=0.6)
+
+    def unload_wh_ref(self, cap, key, ref):
+        """The UNLOAD WH row's Order Line Ref 1 = the Unload Ref. A copy still showing the first order's value is
+        overwritten, or emptied when this container has none."""
+        abbr = "Order Line Ref 1"
+        if self.col_idx(cap, abbr) < 0:
+            self.L("Lines", Line="UNLOAD WH", Field="Unload Ref", Value=ref, Status="COLUMN NOT FOUND")
+            return
+        shown = self.cell_text(self.cell(cap, key, abbr))
+        if norm(shown) == norm(ref):
+            if ref:
+                self.L("Lines", Line="UNLOAD WH", Field="Unload Ref", Value=ref, Actual=shown, Extra="already there",
+                       Status="OK")
+            return
+        check = lambda: norm(self.cell_text(self.cell(cap, key, abbr))) == norm(ref)      # noqa: E731
+        if not ref:                                          # mapped, but this container has none: the copy's is emptied
+            try:
+                self.clear_cell(cap, key, abbr)
+                self.L("Lines", Line="UNLOAD WH", Field="Unload Ref", Value="", Actual=self.cell_text(self.cell(cap, key, abbr)),
+                       Status="OK — emptied")
+            except Exception as e:
+                self.L("Lines", Line="UNLOAD WH", Field="Unload Ref", Status="ERROR clearing: " + str(e).splitlines()[0])
+        elif shown:
+            self.replace_cell("Lines", "UNLOAD WH", cap, key, abbr, ref, check=check)
+        else:
+            self.step("Lines", "UNLOAD WH", cap, key, abbr, ref, settle=0.6, check=check)
 
     def fill_other_lines(self, booked_from, booked_until):
         """Booked DateTime From / Until on every generated row between Depot Out and Depot In."""
@@ -1321,14 +1398,14 @@ class Creation:
                 # an existing line: each cell is emptied (+ Tab), then our value typed (+ Tab) — like the copies
                 key = existing[n]
                 val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
-                if C.get("goodNo"):
-                    self.replace_cell("Cargo", n + 1, cap, key, "Good No.", C.get("goodNo"), lookup=True,
-                                      extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
-                                      check=lambda v=val, g=C.get("goodNo"): norm(v("Good No.")) == norm(g))
+                # each cell's value is replaced in the page (no mouse clicks: those made BC scroll the grid)
+                self.cargo_step(n + 1, key, "Good No.", C.get("goodNo"),
+                                extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
+                                check=lambda v=val, g=C.get("goodNo"): norm(v("Good No.")) == norm(g))
                 for abbr, k in (("Quantity", "quantity"), ("Gross Weight", "grossWeight"), ("Net Weight", "netWeight"),
                                 *((cap_, k_) for k_, cap_, _cn in CARGO_TEXT)):
                     if C.get(k):                     # net weight only when mapped: otherwise the cell is left alone
-                        self.replace_cell("Cargo", n + 1, cap, key, abbr, str(C.get(k)))
+                        self.cargo_step(n + 1, key, abbr, str(C.get(k)))
                 continue
             def empty_row():
                 i = self.col_idx(cap, "Good No.")
@@ -1342,15 +1419,15 @@ class Creation:
                 continue
             key = row.get_attribute("rowkey", timeout=READ_MS)
             val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
-            self.step("Cargo", n + 1, cap, key, "Good No.", C.get("goodNo"), lookup=True, settle=0.7,
-                      extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
-                      check=lambda v=val, g=C.get("goodNo"): norm(v("Good No.")) == norm(g))
-            self.step("Cargo", n + 1, cap, key, "Quantity", str(C.get("quantity") or ""))
-            self.step("Cargo", n + 1, cap, key, "Gross Weight", str(C.get("grossWeight") or ""))
-            # only for clients whose mapping fills it; an empty value is skipped by step() and the cell left alone
-            self.step("Cargo", n + 1, cap, key, "Net Weight", str(C.get("netWeight") or ""))
+            self.cargo_step(n + 1, key, "Good No.", C.get("goodNo"),
+                            extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
+                            check=lambda v=val, g=C.get("goodNo"): norm(v("Good No.")) == norm(g))
+            self.cargo_step(n + 1, key, "Quantity", str(C.get("quantity") or ""))
+            self.cargo_step(n + 1, key, "Gross Weight", str(C.get("grossWeight") or ""))
+            # only for clients whose mapping fills it; an empty value is skipped and the cell left alone
+            self.cargo_step(n + 1, key, "Net Weight", str(C.get("netWeight") or ""))
             for k, col, _cn in CARGO_TEXT:           # ADR Description (ADR goods) / Description 2 (NADR goods)
-                self.step("Cargo", n + 1, cap, key, col, str(C.get(k) or ""))
+                self.cargo_step(n + 1, key, col, str(C.get(k) or ""))
         if len(existing) > len(cargo):
             self.L("Cargo", Line="existing", Value=f"{len(existing) - len(cargo)} line(s)",
                    Status="CHECK — the order has more cargo lines than this shipment: the extra ones are left as they are")
@@ -2049,6 +2126,54 @@ class Creation:
             return
         self.step(section, line, caption, key, abbr, value, lookup=lookup, settle=0.6, extra=extra, check=check)
 
+    def cargo_fill(self, key, abbr, value):
+        """Put `value` in an Order Cargo cell from inside the page (find the input by controlname, set it, Tab, blur).
+        Raises _Stop when the cell cannot be reached."""
+        cap = "Order Cargo"
+        cn, idx = _CARGO_CONTROLS.get(abbr, ""), self.col_idx(cap, abbr)
+        g = self.grid(cap)
+        if g is None:
+            raise _Stop("Order Cargo grid not found")
+        ready = lambda click: self.grid(cap).evaluate(_CARGO_INPUT_JS, [key, cn, idx, click])     # noqa: E731
+        if not ready(False):
+            for _ in range(3):                               # click the cell in the page, wait for its input
+                ready(True)
+                if self.until(lambda: ready(False), 2.0, 0.1):
+                    break
+            else:
+                raise _Stop(f'"{abbr}" cell not editable on row {key}')
+        self.grid(cap).evaluate(_CARGO_FILL_JS, [key, cn, idx, value])
+        self.wait(0.9)                                       # BC's round trip to the server
+
+    def cargo_step(self, line, key, abbr, value, *, extra=None, check=None, clear=False):
+        """One Order Cargo cell, filled in the page and read back for the log. `clear`: "" empties the cell."""
+        if not value and not clear:
+            return
+        cap = "Order Cargo"
+        number = None
+        if value and abbr in _NUMBER_COLUMNS:
+            sep = self.decimal_sep(cap)
+            try:
+                number = float(str(value).replace(",", "."))
+                value = str(value).replace(",", ".").replace(".", sep)
+            except ValueError:
+                number = None
+        now = lambda: self.cell_text(self.cell(cap, key, abbr))                                     # noqa: E731
+        right = lambda: (self.until(check, 2.0) if check and value                                  # noqa: E731
+                         else abs((_parse_num(now(), self.decimal_sep(cap)) or 0) - number) < 0.0005 if number is not None
+                         else norm(now()) == norm(value))
+        try:
+            self.cargo_fill(key, abbr, value)
+            ok = right()
+            if not ok:                                       # once more
+                logger.info("Cargo / %s: shows %r, filling again", abbr, now())
+                self.cargo_fill(key, abbr, value)
+                ok = right()
+            self.L("Cargo", Line=line, Field=abbr, Value=value, Actual=now(), Extra=extra() if extra else "",
+                   Status=("OK — emptied" if not value else "OK") if ok else "CHECK")
+        except Exception as e:
+            self.L("Cargo", Line=line, Field=abbr, Value=value, Status="ERROR: " + str(e).splitlines()[0])
+
     def apply_general(self, changes):
         """Correct this order's General fields (customer ref, vessel, dates ...) to its own container's values."""
         for key, (label, cn, opts) in PER_ORDER_GENERAL.items():
@@ -2091,7 +2216,7 @@ class Creation:
         if "other_date" in changes or "other_until" in changes:
             self.ensure_pane("Lines", lambda: self.grid("Lines"))
             self.fill_other_lines(changes.get("other_date"), changes.get("other_until"))
-        if any(k in changes for k in ("goodNo", "quantity", "grossWeight", "netWeight")):
+        if any(k in changes for k in ("goodNo", "quantity", "grossWeight", "netWeight", *(k_ for k_, _c, _n in CARGO_TEXT))):
             cap = "Order Cargo"
             self.ensure_pane(cap, lambda: self.grid(cap))
             def first():
@@ -2104,27 +2229,15 @@ class Creation:
                 key = row.get_attribute("rowkey", timeout=READ_MS)
                 val = lambda abbr, k=key: self.cell_text(self.cell(cap, k, abbr))
                 if "goodNo" in changes:
-                    self.replace_cell("Cargo", 1, cap, key, "Good No.", changes["goodNo"], lookup=True,
-                                      extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
-                                      check=lambda v=val, g=changes["goodNo"]: norm(v("Good No.")) == norm(g))
-                if "quantity" in changes:
-                    self.replace_cell("Cargo", 1, cap, key, "Quantity", changes["quantity"])
-                if "grossWeight" in changes:
-                    self.replace_cell("Cargo", 1, cap, key, "Gross Weight", changes["grossWeight"])
-                if "netWeight" in changes:
-                    self.replace_cell("Cargo", 1, cap, key, "Net Weight", changes["netWeight"])
-                for k, col, _cn in CARGO_TEXT:
-                    if k not in changes:
-                        continue
-                    if changes[k]:
-                        self.replace_cell("Cargo", 1, cap, key, col, changes[k])
-                    else:                            # the first order's value does not belong on this one
-                        try:
-                            self.clear_cell(cap, key, col)
-                            self.L("Cargo", Line=1, Field=col, Value="", Actual=self.cell_text(self.cell(cap, key, col)),
-                                   Status="OK — emptied (not this goods kind)")
-                        except Exception as e:
-                            self.L("Cargo", Line=1, Field=col, Status="ERROR clearing: " + str(e).splitlines()[0])
+                    self.cargo_step(1, key, "Good No.", changes["goodNo"],
+                                    extra=lambda v=val: f"{v('Description')} / {v('Unit of Measure Code')}",
+                                    check=lambda v=val, g=changes["goodNo"]: norm(v("Good No.")) == norm(g))
+                for abbr, k in (("Quantity", "quantity"), ("Gross Weight", "grossWeight"), ("Net Weight", "netWeight")):
+                    if k in changes:
+                        self.cargo_step(1, key, abbr, changes[k])
+                for k, col, _cn in CARGO_TEXT:       # "" = the first order's value does not belong on this one: emptied
+                    if k in changes:
+                        self.cargo_step(1, key, col, changes[k], clear=True)
         if "remarks" in changes:
             self.set_remarks(changes["remarks"])
         self.close_date_picker()
@@ -2144,7 +2257,8 @@ class Creation:
             self.apply_changes(changes)
         if len(self.containers) > 1:                     # each order's UNLOAD WH row carries its own container
             try:
-                self.unload_wh_container(container.get("containerNoText") or container["containerNo"])
+                self.unload_wh_container(container.get("containerNoText") or container["containerNo"],
+                                         container.get("unloadWhRef"))
             except FlowFailed:
                 raise
             except Exception as e:

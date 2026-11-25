@@ -39,6 +39,7 @@ def _diff_columns(d: dict, containers: list) -> list[tuple[str, callable, str]]:
         ("Depot In ref", lambda c: c.get("depotInRef"), in_l.get("ref1")),
         ("Depot In booked", lambda c: c.get("depotInDate"), in_l.get("bookedFrom")),
         ("Other rows booked", lambda c: c.get("otherFrom"), other.get("bookedFrom")),
+        ("Unload Ref", lambda c: c.get("unloadWhRef"), d.get("unloadWhRef")),
         ("Good No.", lambda c: c.get("goodNo"), cargo.get("goodNo")),
         ("Quantity", lambda c: c.get("quantity"), cargo.get("quantity")),
         ("Gross Weight", lambda c: c.get("grossWeight"), cargo.get("grossWeight")),
@@ -49,12 +50,12 @@ def _diff_columns(d: dict, containers: list) -> list[tuple[str, callable, str]]:
     ]
     s = lambda v: "" if v is None else str(v)
     # a column only when some container would really be corrected (an empty own value keeps the first order's)
-    clearable = {"ADR Description", "Description 2"}        # emptied on an order whose goods are the other kind
+    clearable = {"ADR Description", "Description 2", "Unload Ref"}     # emptied on a copy that has no value of its own
     return [(label, get, s(first)) for label, get, first in cols
             if any((s(get(c)) or label in clearable) and s(get(c)) != s(first) for c in containers)]
 
 
-_CLEARED = {"ADR Description", "Description 2"}         # empty on a copy = emptied there, not "as the first order"
+_CLEARED = {"ADR Description", "Description 2", "Unload Ref"}   # empty on a copy = emptied there, not "as the first order"
 
 
 def _drawer_cell(label, own, first) -> dict:
@@ -104,7 +105,9 @@ def preview(session, client, shipment) -> dict:
         "general": general,
         "lines": [{"row": ln["action"], "address_no": ln["addressNo"], "ref": ln["ref1"],
                    "booked_from": ln["bookedFrom"], "booked_until": ln["bookedUntil"],
-                   "note": ln.get("addressNote") or ""} for ln in d["lines"]],
+                   "note": ln.get("addressNote") or ""} for ln in d["lines"]]
+                 + ([{"row": "UNLOAD WH", "address_no": "", "ref": d["unloadWhRef"], "booked_from": "",
+                      "booked_until": "", "note": "", "ref_only": True}] if d.get("unloadWhRef") is not None else []),
         "other_rows": ({"from": d["otherLines"].get("bookedFrom", ""), "until": d["otherLines"].get("bookedUntil", "")}
                        if d.get("otherLines") else None),
         "cargo": [{"good_no": c.get("goodNo"), "quantity": c.get("quantity"), "gross_weight": c.get("grossWeight"),

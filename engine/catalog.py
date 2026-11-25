@@ -59,6 +59,8 @@ LINES = {
     "depot_out": ("DEPOT OUT", (Field("ref", "Order Line Ref 1"), Field("date", "Booked DateTime From", kind="date"))),
     "depot_in": ("DEPOT IN", (Field("ref", "Order Line Ref 1"), Field("date", "Booked DateTime From", kind="date"))),
     "others": ("All other rows", (Field("date", "Booked DateTime From", kind="date"),)),
+    # the UNLOAD WH row's Order Line Ref 1: typed only when the client maps it (each copy gets its container's value)
+    "unload_wh": ("UNLOAD WH", (Field("ref", "Unload Ref (Order Line Ref 1)"),)),
 }
 
 # ── Order Cargo grid (columns found by their caption) and the Order Remarks line ───────────────────────────────────
