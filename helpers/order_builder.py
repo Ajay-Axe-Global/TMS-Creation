@@ -40,6 +40,7 @@ SAME_ON_ALL_ORDERS = {f.key for f in catalog.GENERAL if f.same_on_all}   # never
 CONSTANT_FIELDS = {f.key for f in catalog.general("once")}               # typed on the first order only
 LINE_KEYS = {"DEPOT OUT": "depot_out", "DEPOT IN": "depot_in"}  # Lines action -> key in the payload
 LINE_ACTIONS = ("DEPOT OUT", "UNLOAD", "DEPOT IN")              # the Lines rows, top to bottom (UNLOAD has no depot of its own)
+UNLOAD_WH = "UNLOAD WH"       # lines(v) may give its "ref": the UNLOAD WH row's Order Line Ref 1 (the Unload Ref)
 OTHER_LINES = "OTHERS"        # every Lines row that is not DEPOT OUT / DEPOT IN (TMS may generate any number of them,
                               # even with the same action code twice): lines(v) gives them only booked dates
 LINE_VALUES = {"ref", "bookedFrom", "bookedUntil"}
@@ -100,7 +101,7 @@ class Spec:
         bad = sorted(set(self.general(empty)) - set(GENERAL_FIELDS) - CONSTANT_FIELDS - {"sealNo", "containerNo"})
         if self.lines:
             got = self.lines(empty)
-            bad += sorted(a for a in got if a not in (*LINE_ACTIONS, OTHER_LINES))
+            bad += sorted(a for a in got if a not in (*LINE_ACTIONS, OTHER_LINES, UNLOAD_WH))
             bad += sorted(v for vals in got.values() for v in set(vals) - LINE_VALUES)
         if self.cargo:
             bad += sorted(set(self.cargo(empty)) - CARGO_VALUES)
@@ -214,6 +215,10 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
     other = {k: _text(v) for k, v in (wanted.get(OTHER_LINES) or {}).items()}
     data["otherLines"] = ({"bookedFrom": other.get("bookedFrom", ""), "bookedUntil": other.get("bookedUntil", "")}
                           if other.get("bookedFrom") or other.get("bookedUntil") else {})
+    # None = not mapped (the cell is left alone); "" = mapped, but this container has no value
+    unload_ref = lambda c: (None if UNLOAD_WH not in lines_of(c)                       # noqa: E731
+                            else _text((lines_of(c)[UNLOAD_WH] or {}).get("ref")))
+    data["unloadWhRef"] = unload_ref(first)
 
     # ── Order Cargo: one line, from the first container ──
     cg = cargo_of(first)
@@ -241,6 +246,7 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
         # "containerNo" is the container's identity (results are saved by it); "containerNoText" is what is typed
         return {"containerNo": c["container_no"], "containerNoText": gc.get("containerNo") or c["container_no"],
                 "otherFrom": _text(oth.get("bookedFrom")), "otherUntil": _text(oth.get("bookedUntil")),
+                "unloadWhRef": unload_ref(c),
                 "sealNo": gc.get("sealNo", ""),
                 # the General fields this order must end with; the flow corrects those that differ from the first order
                 "general": {f: gc[f] for f in GENERAL_FIELDS if f in gc and f not in SAME_ON_ALL_ORDERS},

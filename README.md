@@ -62,13 +62,16 @@ Who can use it: admins on every client, users only on clients granted to them (A
    **Show more** (e.g. VGM Closing) is opened with `button[title="Show more fields"]` and then filled.
 2. **Attach files.**
 3. **Lines** — Depot Out / Depot In: address no., Order Line Ref 1, booked from / until, closing check. Other rows get
-   their booked dates. The **UNLOAD WH** row gets the order's container no. in its *Container No.* column. A depot name
+   their booked dates. The **UNLOAD WH** row gets the order's container no. in its *Container No.* column, and its
+   **Unload Ref** (Order Line Ref 1) only when the client maps it (Mapping → Lines → UNLOAD WH; each copy gets its
+   container's value, not mapped = the cell is left alone). A depot name
    not in Admin > Addresses uses the **default address 75121** (`DEFAULT_DEPOT_ADDRESS_NO`), noted in the log.
 4. **Order Cargo** — a cargo line the new order already has (e.g. `G0001 General cargo` from the trade lane) is
    overwritten (each cell emptied + Tab, then our value); otherwise the empty line is used: goods code, quantity, gross weight, and **net weight only if mapped** (column caption "Net Weight").
    **ADR / NADR:** by the container's ADR / NADR value, ADR goods get **ADR Description**, NADR goods **Description 2**
    (the other stays empty). The value is the mapping's (Goods: *ADR Description* / *Description 2*), or the
-   container's **product** when not mapped. A copy whose container has another product or kind is corrected (the
+   container's **product** (synced from the source column `product`; a container with another product keeps its own)
+   when not mapped. A copy whose container has another product or kind is corrected (the
    column that doesn't apply is emptied).
 5. **Remarks**, revenues, then **Copy Order** for the other containers. Each copy gets its own container no. / seal and
    is corrected where its container differs (customer ref, depot address / ref / dates, goods, quantity, weights,

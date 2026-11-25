@@ -40,6 +40,8 @@ class MappingFlow:
         if self.settings["others_enabled"] and "lines.others.date" in self.rows:
             date = self._text("lines.others.date", v)
             out["OTHERS"] = {"bookedFrom": date, "bookedUntil": date if self.settings["others_until_same"] else ""}
+        if "lines.unload_wh.ref" in self.rows:
+            out["UNLOAD WH"] = {"ref": self._text("lines.unload_wh.ref", v)}
         return out
 
     def cargo(self, v) -> dict:

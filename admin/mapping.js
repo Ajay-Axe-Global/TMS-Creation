@@ -249,16 +249,18 @@
           const card = document.createElement("div");
           card.className = "map-block";
           card.innerHTML = `<h4>${esc(b.title)}</h4>`;
-          if (b.block !== "others") {
+          if (b.block === "depot_out" || b.block === "depot_in") {
             card.insertAdjacentHTML("beforeend", `<div class="map-auto"><span>Address No.</span>
               <em>auto, from the depot</em></div>`);
-          } else {
+          } else if (b.block === "others") {
             card.insertAdjacentHTML("beforeend", check("others_enabled", "Fill the booked date on every other row"));
           }
           const off = b.block === "others" && !settings.others_enabled;
           if (!off) b.fields.forEach(f => { f.no = ++n; card.appendChild(fieldRow(f)); });
           const until = { depot_out: "depot_out_until_same", depot_in: "depot_in_until_same", others: "others_until_same" }[b.block];
-          if (!off) card.insertAdjacentHTML("beforeend", check(until, "Booked Until = Booked From"));
+          if (!off && until) card.insertAdjacentHTML("beforeend", check(until, "Booked Until = Booked From"));
+          if (b.block === "unload_wh") card.insertAdjacentHTML("beforeend",
+            `<div class="map-auto"><span>Not mapped</span><em>the cell is left alone</em></div>`);
           blocks.appendChild(card);
         });
         box.appendChild(blocks);
