@@ -31,6 +31,7 @@ import re
 from engine import catalog
 from helpers import goods as goods_svc
 from helpers import tms_creation
+from helpers import container_types as ctypes
 from helpers.flow_errors import FlowFailed
 
 # The General-tab fields a customer's general() may return (plus "sealNo", and the CONSTANT_FIELDS typed once) — all
@@ -51,7 +52,10 @@ def goods_kind(adr_nadr) -> str:
     """"ADR" | "NADR" | "" from the source's adr_nadr ("NADR", "Non-ADR", "adr" ...)."""
     t = re.sub(r"[^A-Z]", "", str(adr_nadr or "").upper())
     return "ADR" if t == "ADR" else "NADR" if t in ("NADR", "NONADR") else ""
-DEFAULT_SAME_FOR_ALL = ("container_type",)                      # the flow copies the first order, so the type is shared
+DEFAULT_SAME_FOR_ALL = ()                                       # nothing must be shared: copies are corrected per order
+# values each copy is corrected to, so containers may differ in them even when an older mapping / client file still
+# lists them in SAME_FOR_ALL (the container type: retyped on every copy whose container has another type)
+CORRECTED_PER_ORDER = {"container_type"}
 VALUE_NAMES = catalog.FLAT_VALUE_NAMES                          # the plain values every container carries
 
 
@@ -122,10 +126,16 @@ def check_payload(session, payload: dict, flow) -> list[str]:
     if any(not c["container_no"] for c in containers):
         problems.append("a container has no container number")
     for c in containers:
+        ct = c.get("container_type") if c.get("container_type") is not None else payload["shipment"].get("container_type")
+        if ct and not ctypes.to_code(ct):
+            problems.append(f'container {c["container_no"]}: container type "{ct}" has no TMS container type code — '
+                            "add this spelling to its code in helpers/container_types.py")
         if c["goods"] and not goods_code_of(c["goods"]):
             problems.append(f'container {c["container_no"]}: goods "{c["goods"]}" has no TMS goods code — '
                             "ask an administrator to add it in Admin → Goods")
     for field in spec.same_for_all:
+        if field in CORRECTED_PER_ORDER:
+            continue
         if len({c[field] for c in containers}) > 1:
             label = field.replace("_", " ")
             problems.append(f"its containers have different {label}s — the TMS flow copies the first order, "
@@ -149,6 +159,9 @@ def build_job(session, payload: dict, files: list, flow) -> dict:
             return v if v is not None else s.get(name)
         values = {n: ("" if value_of(n) is None else value_of(n)) for n in VALUE_NAMES}
         values["goods_code"] = goods_code_of(c.get("goods")) or ""
+        # TMS wants its container type CODE ("40 HC" -> "40HC"): helpers/container_types.py. Unknown values are
+        # stopped in check_payload, so here a value without a code is only left as it is (a dry preview).
+        values["container_type"] = ctypes.to_code(values["container_type"]) or values["container_type"]
         values["depot_out"] = Depot(c.get("depot_out") or s.get("depot_out"))
         values["depot_in"] = Depot(c.get("depot_in") or s.get("depot_in"))
         return Values(values)

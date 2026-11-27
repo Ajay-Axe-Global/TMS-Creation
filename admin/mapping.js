@@ -120,7 +120,7 @@
     const textField = f.kind !== "date";           // a TMS date field keeps TMS's own date format
     if (!textField) m.fmt = "";
     const fmtSel = hasDate && textField ? `<select class="map-fmt" title="How the date is written in this text, e.g. dd/MM gives 12/11">
-        <option value="">Date: TMS (MM/dd/yyyy)</option>
+        <option value="">Date: TMS (dd/MM/yyyy)</option>
         ${((catalog && catalog.date_formats) || []).map(x => `<option value="${esc(x)}"${x === m.fmt ? " selected" : ""}>Date: ${esc(x)}</option>`).join("")}
       </select>` : "";
     const el = document.createElement("div");
@@ -274,14 +274,10 @@
       host.appendChild(box);
     });
     const rules = pane("rules");
-    const same = (settings.same_for_all || []).includes("container_type");
-    rules.insertAdjacentHTML("beforeend", `<div class="map-rule"><label class="map-check"><input type="checkbox" id="map-same-type" ${same ? "checked" : ""}/>
-      Container type must be the same on every container — the first order is copied, so a shipment with mixed types is refused</label></div>`);
+    rules.insertAdjacentHTML("beforeend", `<div class="map-rule">Mixed container types in one shipment are allowed:
+      each copied order gets its own container's type (Container Type is retyped on the copy).</div>`);
     paneFoot(rules, "rules");
     host.appendChild(rules);
-    rules.querySelector("#map-same-type").addEventListener("change", e => {
-      settings.same_for_all = e.target.checked ? ["container_type"] : []; setDirty(true);
-    });
     bindChecks(host);
     showPane();
     renderSteps();

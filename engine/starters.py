@@ -51,7 +51,7 @@ def _mapping(*, booking_parts, customer_ref, time, transport_type=None):
     return rows
 
 
-SETTINGS = {"same_for_all": ["container_type"], "depot_out_until_same": True, "depot_in_until_same": False,
+SETTINGS = {"same_for_all": [], "depot_out_until_same": True, "depot_in_until_same": False,
             "others_enabled": True, "others_until_same": True}
 
 STARTERS = {

@@ -198,14 +198,16 @@ def _dt_parts(text):
 
 
 def same_datetime(typed, shown) -> bool:
-    """True when the cell text `shown` is the date (and time) we typed, whichever order or clock TMS displays it in.
-    The day and month are compared in either order, so a day-first display of a month-first value still matches."""
+    """True when the cell text `shown` is the date (and time) we typed, whichever clock TMS displays it in. Both are
+    read in the TMS date order (date_order); day and month are NOT matched either way round any more — that let a
+    swapped date (10 Nov stored as 11 Oct) pass as OK."""
     t, s = _dt_parts(typed), _dt_parts(shown)
     if t is None or s is None:
         return False
     (ty, tp, tm), (sy, sp, sm) = t, s
     month, day = tp if date_order() == "mdy" else (tp[1], tp[0])
-    if ty != sy or (month, day) not in {(sp[0], sp[1]), (sp[1], sp[0])}:
+    smonth, sday = sp if date_order() == "mdy" else (sp[1], sp[0])
+    if ty != sy or (month, day) != (smonth, sday):
         return False
     return tm is None or sm is None or tm == sm
 
@@ -229,10 +231,10 @@ class Creation:
         self.calc = job.get("calcRevenues", True) is not False
         self.started = time.monotonic()
         self._step = None                                # (heading, start time) of the step in progress
-        self.deadline = time.monotonic() + (job.get("timeoutMs") or 15 * 60 * 1000) / 1000
         self.emit = log or (lambda kind, msg: None)
         self.log_rows: list[dict] = []
         self.orders: dict[str, str] = {}
+        self.order_errors: list[str] = []                # copies whose edit failed (the others were still done)
         self.file_no: str | None = None
         self.cur = 0
         self.cur_no = ""
@@ -261,8 +263,7 @@ class Creation:
         self.emit("flow", f"⏱ {name} took {took}")
 
     def wait(self, seconds):
-        if time.monotonic() > self.deadline:
-            raise FlowFailed("Job time limit reached")
+        """No job time limit: a job runs until it finishes or a step fails (each single action still times out)."""
         self.pg.wait_for_timeout(int(seconds * 1000))
 
     def until(self, fn, timeout=8.0, step=0.15):
@@ -1526,11 +1527,36 @@ class Creation:
         self.head(f"6) COPY ORDER × {copies}")
         self.blur_active()
         self.wait(0.6)
-        self.open_tab("Home", "Copy Order")
-        self.click_action("Copy Order")
-        form = self.until(self.copy_form, 10.0, 0.1)
+        self.handle_messages("Copy", 2.0)               # a late message (e.g. from Calculate Revenues) blocks the click
+        form = None
+        for attempt in range(4):
+            # BC ignores a click while it is still busy (revenues just calculated, the card saving): the dialog then
+            # never opens. Try again, closing any message first and waiting a little longer each time.
+            if attempt:
+                self.L("Copy", Field="Copy Order", Status=f"CHECK — dialog did not open, trying again ({attempt + 1}/4)")
+                self.emit("flow", f"Copy Order dialog did not open — trying again ({attempt + 1}/4)")
+                self.handle_messages("Copy", 2.0)
+                self.blur_active()
+                self.wait(1.5 * attempt)
+            try:
+                self.open_tab("Home", "Copy Order")
+                b = self.until(lambda: self.action_btn("Copy Order"), 8.0)
+                if not b:
+                    continue
+                if attempt % 2 == 0:
+                    b.click(timeout=5000)
+                else:
+                    b.evaluate("e => e.click()")             # the click as the page gets it, if the mouse was blocked
+            except Exception as e:
+                self.L("Copy", Field="Copy Order", Status="CHECK — click: " + str(e).splitlines()[0])
+                continue
+            form = self.until(self.copy_form, 12.0, 0.1)
+            if form:
+                break
         if not form:
-            raise _Stop("Copy Order dialog did not open")
+            d = self.message_dialog()
+            why = re.sub(r"\s+", " ", d.inner_text(timeout=READ_MS) or "").strip()[:200] if d else ""
+            raise _Stop("Copy Order dialog did not open after 4 tries" + (f" — TMS shows: {why}" if why else ""))
         qty = form.locator('[controlname="No Of Copies"] input').first
         if not self.until(lambda: qty.count() and qty.is_visible(), 6.0, 0.2):
             raise _Stop("No Of Copies field not found")
@@ -1803,6 +1829,33 @@ class Creation:
             self.L("Filter", Field="View menu", Status="CHECK — " + str(e).splitlines()[0])
             return False
 
+    def close_popup_on_list(self):
+        """Close an open drop-down / field list WITHOUT leaving the list. Escape is pressed only while a drop-down is
+        really open: on a BC list page with nothing open, Escape CLOSES THE PAGE and lands on the Home page."""
+        try:
+            if self.dropdown_open() or self.f.locator('[role="listbox"]:visible, [role="option"]:visible').count():
+                self.pg.keyboard.press("Escape")
+                self.until(lambda: not self.dropdown_open(), 1.5)
+        except Exception:
+            pass
+
+    def ensure_on_orders_list(self):
+        """Back on the Orders list if BC dropped to the Home page (Orders link showing on top): click Orders again."""
+        if self.list_rows() and (self.filter_btn() or self.shown('[id^="page-views"]')):
+            return True
+        orders = tms_nav._first_visible(self.f, ("menuitem", "link"), tms_nav._ORDERS_MENU)
+        if orders is None:
+            return False
+        self.L("Filter", Field="Orders list", Status="CHECK — TMS showed the Home page; opening Orders again")
+        self.emit("flow", "↩ on the Home page — opening the Orders list again")
+        try:
+            orders.click(timeout=5000)
+        except Exception:
+            return False
+        ok = self.wait_list_ready(20.0)
+        self.wait(1.0)
+        return ok
+
     def wait_list_ready(self, timeout=20.0):
         """After Back, BC draws the order rows first and the toolbar / filter pane a moment later. Wait until any of
         the things the filter step works with is on screen: the File No. box, "+ Filter...", the "All" view dropdown or
@@ -1830,6 +1883,7 @@ class Creation:
                     continue                                 # the pane is closed: the view menu opens it
                 raise _Stop('"+ Filter..." button not found (filter pane closed?)')
             fb.click()
+            self.wait(1.0)                                   # let BC draw the field list before looking for File No.
             opt = self.until(self.file_no_option, 2.5, 0.1)
             # only look for the combobox when the option is not already there (it used to be waited for regardless)
             combo = None if opt else self.until(lambda: self.shown(
@@ -1837,7 +1891,7 @@ class Creation:
                 'input[role="combobox"], input[role="combobox"][aria-expanded="true"]'), 2.5, 0.1)
             if opt or combo or self.file_no_filter_input():
                 break
-            self.pg.keyboard.press("Escape")
+            self.close_popup_on_list()
             self.wait(0.5)
         if not opt and combo:
             chev = combo.locator("xpath=ancestor::*[contains(@class,'ms-ComboBox')][1]//button").first
@@ -1862,6 +1916,7 @@ class Creation:
                 except Exception as e:
                     logger.info("File No. option click failed (%s) — looking it up again", str(e).splitlines()[0])
                     self.wait(0.3)
+            self.wait(1.0)                                   # BC adds the File No. filter line
             self.until(self.file_no_filter_input, 3.0)
             if not self.file_no_filter_input() and combo:
                 self.type_text(combo, "File No.")
@@ -1881,12 +1936,32 @@ class Creation:
     def filter_by_file_no(self, file_no):
         self.head("10) FILTER LIST BY FILE NO.")
         self.wait_list_ready()                       # the toolbar and filter pane can lag the rows right after Back
-        inp = self.file_no_filter_input() or self.pick_file_no_field()
-        inp.click()
-        inp.fill(file_no)
-        self.wait(0.15)
-        inp.press("Enter")
+        self.wait(1.0)
         self.filter_value = file_no
+        inp, last = self.file_no_filter_input(), None
+        for round_ in range(3):                      # BC busy right after Back: the field list may not open at first
+            if inp:
+                break
+            self.ensure_on_orders_list()
+            try:
+                inp = self.pick_file_no_field()
+            except Exception as e:
+                last = str(e).splitlines()[0] if str(e) else type(e).__name__
+                self.L("Filter", Field="File No.", Status=f"CHECK — try {round_ + 1}: {last}")
+                self.close_popup_on_list()
+                self.wait(1.5 * (round_ + 1))
+                self.wait_list_ready(10.0)
+                inp = self.file_no_filter_input()
+        if inp:
+            inp.click()
+            inp.fill(file_no)
+            self.wait(1.0)                           # the typed File No. settles before Enter
+            inp.press("Enter")
+        elif self.search_list(file_no):              # last way: the list's own Search box (no filter pane needed)
+            self.L("Filter", Field="File No.", Value=file_no, Status="OK — filter pane would not open; used the list Search")
+        else:
+            raise _Stop(f'Could not filter the list by File No. {file_no}: the filter pane and the Search box both '
+                        f'failed ({last})')
 
         def settled():
             texts = self.list_texts()
@@ -1909,6 +1984,31 @@ class Creation:
         self.L("Filter", Field="File No.", Value=file_no, Actual=f"{ok} order(s)", Status="OK")
         self.emit("flow", f"✅ {ok} order(s) for {file_no}")
         return ok
+
+    _SEARCH_OPEN_JS = "() => {" + _JS_VIS + _JS_NORM + r"""
+      const box = [...document.querySelectorAll('input')].find(i => vis(i) &&
+        /^search/.test(norm(i.getAttribute('aria-label') || i.placeholder || '')));
+      if (box) { box.setAttribute('data-pw', 'listsearch'); return true; }
+      const b = [...document.querySelectorAll('button')].find(e => vis(e) &&
+        /^search/.test(norm(e.getAttribute('aria-label') || e.title || '')));
+      if (b) b.click();
+      return false; }"""
+
+    def search_list(self, text):
+        """Type `text` into the order list's Search box (magnifier). True when it was typed."""
+        try:
+            self.ensure_on_orders_list()
+            self.close_popup_on_list()
+            for _ in range(4):
+                if self.f.evaluate(self._SEARCH_OPEN_JS):
+                    box = self.f.locator('[data-pw="listsearch"]').first
+                    box.fill(text, timeout=5000)
+                    box.press("Enter")
+                    return True
+                self.wait(0.8)
+        except Exception as e:
+            self.L("Filter", Field="Search", Status="CHECK — " + str(e).splitlines()[0])
+        return False
 
     # ── 11) edit every order ────────────────────────────────────────────────
 
@@ -1971,12 +2071,24 @@ class Creation:
     def go_next(self, prev_no):
         self.blur_active()
         self.wait(0.8)
-        b = self.until(self.next_btn, 5.0)
-        if not b:
-            raise _Stop("Next record button not found / disabled (last record?)")
-        b.click()
-        if not self.until(lambda: self.card_no() and self.card_no() != prev_no and self.container("Go4CTR codContainerNo"), 15.0):
-            raise _Stop("Next record did not load")
+        self.close_date_picker()
+        moved = lambda: self.card_no() and self.card_no() != prev_no and self.container("Go4CTR codContainerNo")
+        for attempt in range(3):
+            b = self.until(self.next_btn, 5.0)
+            if not b:
+                raise _Stop("Next record button not found / disabled (last record?)")
+            # A plain click waits up to 15 s for the button to be "stable / not covered"; BC keeps a busy overlay
+            # or a callout over it while it saves the card, so that click timed out. Click it in the page instead
+            # (as a user's click lands), and only fall back to the mouse once.
+            try:
+                b.evaluate("e => e.click()") if attempt < 2 else b.click(timeout=5000, force=True)
+            except Exception as e:
+                self.emit("flow", f"next record click {attempt + 1} failed: {str(e).splitlines()[0]}")
+            if self.until(moved, 12.0):
+                break
+            self.blur_active()
+        else:
+            raise _Stop("Next record did not load (the ▶ next button was clicked 3 times)")
         self.wait(0.8)
 
     def edit_btn(self):
@@ -2301,7 +2413,20 @@ class Creation:
             self.cur = i + 1
             self.emit("flow", f"--- order {k + 1}/{len(self.containers)} — No. {self.cur_no} → {c['containerNo']} ---")
             self.orders[c["containerNo"]] = self.cur_no
-            self.edit_one(i, c)
+            try:
+                self.edit_one(i, c)
+            except FlowFailed:
+                raise
+            except Exception as e:                       # this order is logged as failed; go on with the next one
+                msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+                self.L("Edit", Field="Order " + self.cur_no, Status="STOPPED: " + msg)
+                self.emit("flow", f"⚠ order {self.cur_no} ({c['containerNo']}) not finished: {msg} — going on")
+                self.order_errors.append(f"{self.cur_no} ({c['containerNo']}): {msg}")
+                try:
+                    self.close_date_picker()
+                    self.blur_active()
+                except Exception:
+                    pass
         self.blur_active()
         self.wait(1.5)
 
@@ -2394,6 +2519,8 @@ class Creation:
                 if count != len(self.containers):
                     self.L("Filter", Status=f"CHECK — {count} order(s) on the list but {len(self.containers)} container(s) given")
                 self.edit_orders(nos)
+                if self.order_errors:
+                    stopped = "Not finished: " + "; ".join(self.order_errors)
             except FlowFailed:
                 raise
             except Exception as e:

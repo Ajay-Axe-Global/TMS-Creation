@@ -146,12 +146,12 @@ def run_job(db, browser, job_id: int, *, bc_url: str | None = None) -> None:
     recording = job_video.start(db, job) if create_enabled() else None
     context = page = None
     try:
-        # A stuck login (phone never answered, unknown screen) is worth a screenshot; a wrong
-        # password is not (the page would only show the account name).
+        # A failed login gets a screenshot: what Microsoft showed (stuck screen, unanswered call, or the
+        # "password is incorrect" message with the account it was typed for).
         context, page, login = tms_login.get_logged_in_context(
             browser, db, cred, bc_url=bc_url, on_event=emit,
             video_dir=recording.folder if recording else None, video_size=recording.size if recording else None,
-            on_failure=lambda pg, err: _evidence(db, job, pg) if err.code in ("mfa_failed", "timeout") else None)
+            on_failure=lambda pg, err: _evidence(db, job, pg) if err.code in ("mfa_failed", "timeout", "invalid_credentials") else None)
         frame = tms_nav.open_new_order(page, create=create_enabled(), on_event=emit)
 
         if not create_enabled():

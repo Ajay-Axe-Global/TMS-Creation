@@ -33,6 +33,7 @@ Nothing in `helpers/` is per client. A **published mapping wins**; otherwise `cl
 | Customer no. / trade lane rules | `helpers/tradelanes.py` |
 | Depot name → TMS address no. | `helpers/addresses.py` (table: Admin > Addresses) |
 | Goods name → TMS goods code | `helpers/goods.py` (table: Admin > Goods) |
+| Container type → TMS container type code | `helpers/container_types.py` (code, TMS description, source spellings; an unknown type stops the shipment) |
 | Carrier name → TMS carrier code | `helpers/carriers.py` (table: Admin > Carriers) |
 | Client page (shared by all clients) | `helpers/client_page.py`, `views/client_page/` |
 | Preview (what Create would type) | `helpers/order_preview.py` |
@@ -74,7 +75,7 @@ Who can use it: admins on every client, users only on clients granted to them (A
    when not mapped. A copy whose container has another product or kind is corrected (the
    column that doesn't apply is emptied).
 5. **Remarks**, revenues, then **Copy Order** for the other containers. Each copy gets its own container no. / seal and
-   is corrected where its container differs (customer ref, depot address / ref / dates, goods, quantity, weights,
+   is corrected where its container differs (customer ref, **container type** — a BL may mix 20FT and 40HC —, depot address / ref / dates, goods, quantity, weights,
    remarks, UNLOAD WH container no.).
 
 ---
@@ -126,7 +127,7 @@ Each TMS field gets a *recipe* (`engine/recipe.py`), stored as JSON:
 | separator | What goes between them (`/`) |
 | join / first filled | All filled parts joined, or only the first one that has a value |
 | time | `10:00` typed after a date |
-| **date format** | How a date is written **inside a text field** (Customer Ref. …): TMS default `MM/dd/yyyy`, or `dd/MM`, `dd/MM/yyyy`, `dd-MM`, `ddMM`, `yyyy-MM-dd` … e.g. ITOS / ATA with `dd/MM` → `65767/12/11`. Real date fields always keep TMS's own format |
+| **date format** | How a date is written **inside a text field** (Customer Ref. …): TMS default `dd/MM/yyyy`, or `dd/MM`, `dd/MM/yyyy`, `dd-MM`, `ddMM`, `yyyy-MM-dd` … e.g. ITOS / ATA with `dd/MM` → `65767/12/11`. Real date fields always keep TMS's own format |
 
 Some clients send the goods in the source column `adr_nadr` instead of `goods`: the sync copies `adr_nadr` into
 `goods` when `goods` is empty, so the goods mapping works the same for every client (add the NADR / ADR names in
@@ -199,7 +200,7 @@ Never run `database/seed_sample.py` on production (it is sample data and deletes
 | `TMS_HEADLESS` | `0` = browser window visible (testing), `1` = hidden (server) |
 | `TMS_BROWSERS`, `TMS_SLOTS` | Browsers in the pool × job slots each (default 3 × 3 = 9 jobs at once) |
 | `TMS_COPY_WAIT` | Seconds to wait for TMS to finish the copies after OK in Copy Order (default 180) |
-| `TMS_DATE_FORMAT` | How TMS reads dates (`dmy` = day/month/year; default month/day/year) |
+| `TMS_DATE_FORMAT` | How TMS reads dates (default `dmy` = day/month/year, as TMS shows them; `mdy` only for a TMS set to month-first) |
 | `TMS_DECIMAL_SEP` | `,` or `.`: how quantities / weights are typed (`24500,5`). Empty = read from the cargo grid (a cell like `0,00`), else `,` |
 | `DEFAULT_DEPOT_ADDRESS_NO` | Address no. used for a depot not in Admin > Addresses (default `75121`) |
 | `JWT_SECRET`, `CREDENTIALS_KEY` | Login tokens and the encryption of stored TMS passwords — keep them secret and unchanged |
