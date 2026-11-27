@@ -95,13 +95,14 @@ def json_number(v):
 
 
 def date_order() -> str:
-    """"mdy" (month/day/year, the default) or "dmy" — the order the TMS date fields are typed in (TMS_DATE_FORMAT).
-    It must agree with the browser locale (TMS_LOCALE): Business Central reads what is typed by its locale."""
-    return "dmy" if os.getenv("TMS_DATE_FORMAT", "mdy").strip().lower() == "dmy" else "mdy"
+    """"dmy" (day/month/year, the default) or "mdy" — the order the TMS date fields are typed in (TMS_DATE_FORMAT).
+    TMS shows and reads dates day-first (30/11/2026). Typing month-first there was accepted for days > 12 but
+    silently SWAPPED day and month for days 1-12 (10 Nov typed 11/10/2026 was stored as 11 October)."""
+    return "mdy" if os.getenv("TMS_DATE_FORMAT", "dmy").strip().lower() == "mdy" else "dmy"
 
 
 def tms_date(iso_date: str | None) -> str:
-    """"2026-11-04" -> "11/04/2026" (month/day/year), or "04/11/2026" with TMS_DATE_FORMAT=dmy ("" when absent)."""
+    """"2026-11-04" -> "04/11/2026" (day/month/year), or "11/04/2026" with TMS_DATE_FORMAT=mdy ("" when absent)."""
     if not iso_date:
         return ""
     d = datetime.date.fromisoformat(iso_date)
@@ -109,7 +110,7 @@ def tms_date(iso_date: str | None) -> str:
 
 
 def date_time(iso_date: str | None, time: str = "") -> str:
-    """"2026-11-25", "10:00" -> "11/25/2026 10:00"; just the date when no time is given, "" when there is no date."""
+    """"2026-11-25", "10:00" -> "25/11/2026 10:00"; just the date when no time is given, "" when there is no date."""
     d = tms_date(iso_date)
     return f"{d} {time}" if d and time else d
 

@@ -10,7 +10,7 @@ run when an order is built — never executed as code.
     parts   what to take: {"src": <a name of catalog.SOURCE_VALUES>} or {"text": "..."}      (1 - 8 of them)
     mode    "join" (default): the parts that have a value, joined with `sep`;  "first": the first part that has one
     sep     the separator for "join" (default "")
-    time    "HH:MM", added after every date part (a part whose source is a date is typed month/day/year, MM/dd/yyyy)
+    time    "HH:MM", added after every date part (a part whose source is a date is typed day/month/year, dd/MM/yyyy)
     date_format  one of DATE_FORMATS: how the date parts are written inside a TEXT field (Customer Ref. ...); not
             allowed on a date field, which TMS reads in its own date format
     case    "" | "upper" | "lower"
@@ -21,7 +21,7 @@ import re
 from engine import catalog
 from helpers.convert import date_time
 
-# date_format -> how a date part is written (strftime). "" = the TMS date (MM/dd/yyyy, see helpers/convert.tms_date)
+# date_format -> how a date part is written (strftime). "" = the TMS date (dd/MM/yyyy, see helpers/convert.tms_date)
 DATE_FORMATS = {
     "dd/MM": "%d/%m", "dd/MM/yyyy": "%d/%m/%Y", "dd/MM/yy": "%d/%m/%y", "MM/dd": "%m/%d", "MM/dd/yyyy": "%m/%d/%Y",
     "dd-MM": "%d-%m", "dd-MM-yyyy": "%d-%m-%Y", "dd.MM": "%d.%m", "dd.MM.yyyy": "%d.%m.%Y", "ddMM": "%d%m",
@@ -111,7 +111,8 @@ def check_recipe(key: str, recipe) -> list[str]:
 
 
 DEFAULT_SETTINGS = {
-    "same_for_all": ["container_type"],     # container values that must be equal on every container
+    "same_for_all": [],                     # container values that must be equal on every container (the container
+                                            # type no longer: each copy is corrected to its own)
     "depot_out_until_same": True,           # Depot Out line: Booked Until = Booked From
     "depot_in_until_same": False,           # Depot In line:  Booked Until = Booked From
     "others_enabled": False,                # fill the booked date on every other Lines row

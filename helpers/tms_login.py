@@ -71,6 +71,11 @@ TMS_TIMEZONE = os.getenv("TMS_TIMEZONE", "Europe/Brussels")
 CHROME_PATH = os.getenv("TMS_CHROME_PATH") or None   # None = Playwright's bundled Chromium
 
 POLL_SECONDS = 0.4
+# A sign-in page that shows none of the screens below (blank / half-rendered — the username box never appears)
+# for this long is reloaded, as a person would press F5. Business Central itself loading gets longer.
+STALL_SECONDS = int(os.getenv("TMS_LOGIN_STALL_SECONDS", "25"))
+BC_STALL_SECONDS = int(os.getenv("TMS_BC_STALL_SECONDS", "75"))
+MAX_RELOADS = int(os.getenv("TMS_LOGIN_MAX_RELOADS", "4"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +173,8 @@ class _LoginRun:
         self.pw_submits = 0
         self._last = {}                  # action key -> time, so one screen is never hammered
         self._ready_since = None
+        self._known_at = time.monotonic()    # last time a screen we know was showing (stall detection)
+        self.reloads = 0
 
     # ── plumbing ──────────────────────────────────────────────────────────
     def emit(self, kind: str, message: str):
@@ -221,8 +228,53 @@ class _LoginRun:
                 raise LoginTimeoutError(
                     f"Login did not reach TMS within {self.overall_timeout}s (stuck on: {self._url()}).",
                     url=self._url())
-            self.step()
+            try:
+                self.step()
+            except TmsLoginError:
+                raise                                    # wrong password, call failed …: real outcomes
+            except Exception as e:                       # the page navigated / re-rendered under a click: retry
+                self.emit("retry", f"Login step interrupted ({str(e).splitlines()[0][:120]}) — retrying.")
+            self._check_stall()
             time.sleep(POLL_SECONDS)
+
+    def _known_screen(self) -> bool:
+        """True while the page shows something the login can act on, or is legitimately waiting (a call)."""
+        if self.call_clicked_at is not None or self._ready_since is not None:
+            return True
+        p = self.page
+        return any(_visible(loc) for loc in (
+            self.role("textbox", _EMAIL_BOX), self.role("textbox", _PASSWORD_BOX), p.get_by_text(_KMSI),
+            p.locator("#skipMfaRegistrationLink"), p.get_by_text(_MFA_FAILED), p.locator("#signInAnotherWay"),
+            p.locator("#otherTile"), p.locator("div.table-row"), p.locator("#passwordError"),
+            p.locator("#usernameError"))) or self._call_option() is not None
+
+    def _check_stall(self):
+        """Stuck on a page with no sign-in box (or a Business Central page that never finishes loading): reload it."""
+        now = time.monotonic()
+        try:
+            known = self._known_screen()
+        except Exception:
+            known = False
+        if known:
+            self._known_at = now
+            return
+        on_bc = urlparse(self._url() or "").hostname == self.bc_host
+        if now - self._known_at < (BC_STALL_SECONDS if on_bc else STALL_SECONDS):
+            return
+        if self.reloads >= MAX_RELOADS:
+            return                                       # the overall timeout ends it, with the URL it is stuck on
+        self.reloads += 1
+        self.emit("reload", f"Sign-in page stuck with nothing to fill (on {self._url()}) — "
+                            f"reloading ({self.reloads}/{MAX_RELOADS}).")
+        try:
+            # every 2nd time start over from TMS's own address: a broken redirect is not fixed by reloading it
+            if self.reloads % 2 == 0:
+                self.page.goto(self.bc_url, wait_until="domcontentloaded", timeout=60000)
+            else:
+                self.page.reload(wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            self.emit("reload", f"Reload did not finish ({str(e).splitlines()[0][:120]}) — will check again.")
+        self._known_at = time.monotonic()
 
     def _url(self) -> str | None:
         try:
@@ -235,8 +287,13 @@ class _LoginRun:
         page = self.page
 
         # 1. Terminal errors. Retrying a wrong password only risks locking the account.
-        if _visible(page.locator("#passwordError")) or _visible(page.get_by_text(_BAD_PASSWORD)):
-            raise InvalidCredentialsError("TMS rejected the username/password.", url=self._url())
+        if self.pw_submits and (_visible(page.locator("#passwordError")) or _visible(page.get_by_text(_BAD_PASSWORD))):
+            shown = self._shown_account()
+            who = f" for the account {shown}" if shown else ""
+            raise InvalidCredentialsError(
+                f"Microsoft says the password is incorrect{who} — the TMS password saved for this user is not the "
+                "current one (changed or expired?). Save the current password in the TMS login settings.",
+                url=self._url())
         if _visible(page.locator("#usernameError")) or _visible(page.get_by_text(_NO_ACCOUNT)):
             raise InvalidCredentialsError("TMS does not recognise this username.", url=self._url())
 
@@ -300,6 +357,17 @@ class _LoginRun:
         pass_box = self.role("textbox", _PASSWORD_BOX)
         if _visible(pass_box):
             self.login_seen = True
+            # Microsoft can skip the username screen and ask the password of an account it REMEMBERS. Make sure
+            # that is this user's account before typing their password into it.
+            shown = self._shown_account()
+            if shown and shown.lower() != self.username.strip().lower():
+                if self.due("wrong_account", 5):
+                    self.emit("other_account", f"The password screen is for {shown}, not this user's account — "
+                                               "going back to enter the right username.")
+                    if not self._click_first(page.locator("#idBtn_Back"), page.locator("#otherTile"),
+                                             self.role("link", re.compile(r"(Use another account|Sign in with another)", re.I))):
+                        self.page.goto(self.bc_url, wait_until="domcontentloaded", timeout=60000)
+                return
             if self.due("password", 5):
                 if self.pw_submits >= 3:
                     raise TmsLoginError("The password screen keeps reappearing without an error.",
@@ -348,6 +416,19 @@ class _LoginRun:
                     self.page.locator("div.table-row").filter(has_text=re.compile(r"\bCall\b\s*\+?\s*[\dX]", re.I))):
             if _visible(loc):
                 return loc.first
+        return None
+
+    def _shown_account(self) -> str | None:
+        """The account name Microsoft shows above the password box (None when not shown)."""
+        for sel in ("#displayName", "[data-testid='identityBanner'] div", ".identityBanner"):
+            try:
+                loc = self.page.locator(sel).first
+                if loc.is_visible():
+                    t = (loc.inner_text(timeout=1000) or "").strip()
+                    if "@" in t:
+                        return t.split()[0]
+            except Exception:
+                continue
         return None
 
     def _tick_dont_ask(self, wait_seconds: float = 0):

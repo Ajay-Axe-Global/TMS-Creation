@@ -41,7 +41,8 @@ GENERAL = (
     Field("vesselName", "Vessel Name (Import)", "Go4CTR Vessel Name Import", per_order=True),
     Field("countryOrigin", "Country Of Origin", "CountryOfOrigin", "lookup", vat=True, per_order=True),
     Field("countryDest", "Country Of Destination", "CountryOfDestination", "lookup", vat=True, per_order=True),
-    Field("containerType", "Container Type", "Go4CTR codContainerType", "lookup", same_on_all=True),
+    # a copy whose container has another type gets its own (a BL can hold 20FT and 40HC containers)
+    Field("containerType", "Container Type", "Go4CTR codContainerType", "lookup", per_order=True),
     Field("closingDatetime", "Closing Datetime", "Go4CTR Closing DateTime", "date", per_order=True),
     Field("sealNo", "Seal No.", "Go4CTR Seal No", group="container"),
     Field("tractionOrder", "Traction Order", "Go4CTR Traction Order", group="once"),

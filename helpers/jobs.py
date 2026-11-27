@@ -16,6 +16,8 @@ The job keeps a snapshot (payload), so later edits to the shipment, the client o
 address list never change a job that is queued or being retried.
 """
 import datetime
+
+from helpers import user_messages
 import uuid
 
 from sqlalchemy import text
@@ -286,12 +288,13 @@ def set_outcome(session, job: TmsJob, status: str, *, code: str | None = None, m
         job.status = "queued"
         job.next_retry_at = datetime.datetime.utcnow() + datetime.timedelta(seconds=requeue_in)
         job.shipment.tms_status = "queued"
-        job.shipment.tms_error = job.error_message
+        job.shipment.tms_error = user_messages.for_user("queued", code, job.error_message)
     else:
         job.status = status
         job.finished_at = datetime.datetime.utcnow()
         job.shipment.tms_status = status
-        job.shipment.tms_error = job.error_message
+        # the row shows a short professional message; the technical text stays on the job (Admin, job log)
+        job.shipment.tms_error = user_messages.for_user(status, code, job.error_message)
     session.commit()
 
 
